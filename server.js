@@ -371,4 +371,5 @@ app.listen(PORT, () => {
   console.log(`   Default:      http://localhost:${PORT}/v1/chat/completions (uses NVIDIA)`);
   console.log(`\n⚙️  Settings:`);
   console.log(`   Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`   Thinking mode: ${ENABLE_THINKING_MODE ? '
+  console.log(`   Thinking mode: ${ENABLE_THINKING_MODE ? 'ENABLED' : 'DISABLED'}`);
+}
