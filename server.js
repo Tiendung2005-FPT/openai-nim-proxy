@@ -13,30 +13,21 @@ app.use(express.json());
 // =============================================================================
 // PROVIDER CONFIGURATIONS
 // =============================================================================
-
-// NVIDIA NIM API configuration
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
-// ElectronHub API configuration
 const EHUB_API_BASE = 'https://api.electronhub.ai/v1';
 const EHUB_API_KEY = process.env.EHUB_API_KEY || 'ek-uJfTKZb87hFO3fhUVm0UVw6ses446HozYvHlHtAJgfq4G6lmJo';
 
 // =============================================================================
 // FEATURE TOGGLES
 // =============================================================================
-
-// 🔥 REASONING DISPLAY TOGGLE - Shows/hides reasoning in output
-const SHOW_REASONING = true; // Set to true to show reasoning with <think> tags
-
-// 🔥 THINKING MODE TOGGLE - Enables thinking for specific models that support it
-const ENABLE_THINKING_MODE = false; // Set to true to enable chat_template_kwargs thinking parameter
+const SHOW_REASONING = true;
+const ENABLE_THINKING_MODE = false;
 
 // =============================================================================
 // MODEL MAPPINGS
 // =============================================================================
-
-// NVIDIA NIM Model mapping
 const NVIDIA_MODEL_MAPPING = {
   'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
   'gpt-4': 'qwen/qwen3-coder-480b-a35b-instruct',
@@ -49,7 +40,6 @@ const NVIDIA_MODEL_MAPPING = {
   'deepseek-v3.1-terminus': 'deepseek-ai/deepseek-v3.1-terminus'
 };
 
-// ElectronHub Model mapping (customize these to match ElectronHub's model codes)
 const EHUB_MODEL_MAPPING = {
   'deepseek-v3.1-terminus':'deepseek-v3.1-terminus:free',
   'deepseek-v3.2':'deepseek-v3.2:free',
@@ -59,29 +49,20 @@ const EHUB_MODEL_MAPPING = {
   'minimax-m2':'minimax-m2:free',
   'kimi-k2':'kimi-k2-instruct-0905:free',
   'kimi-k2-thinking':'kimi-k2-thinking:free'
-  // Add more ElectronHub model mappings here
-  // Example: 'my-custom-model': 'ehub-actual-model-code',
 };
 
 // =============================================================================
-// HELPER FUNCTIONS
+// HELPERS
 // =============================================================================
-
 function detectProvider(path) {
   if (path.startsWith('/nvidia/')) return 'nvidia';
   if (path.startsWith('/ehub/')) return 'ehub';
-  return 'nvidia'; // default provider
-}
-
-function getNormalizedPath(path, provider) {
-  return path.replace(`/${provider}`, '');
+  return 'nvidia';
 }
 
 // =============================================================================
 // ENDPOINTS
 // =============================================================================
-
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -92,18 +73,17 @@ app.get('/health', (req, res) => {
   });
 });
 
-// List models endpoint (OpenAI compatible) - works for both providers
 app.get(['/v1/models', '/nvidia/v1/models', '/ehub/v1/models'], (req, res) => {
   const provider = detectProvider(req.path);
   const modelMapping = provider === 'ehub' ? EHUB_MODEL_MAPPING : NVIDIA_MODEL_MAPPING;
-  
+
   const models = Object.keys(modelMapping).map(model => ({
     id: model,
     object: 'model',
     created: Date.now(),
     owned_by: `${provider}-proxy`
   }));
-  
+
   res.json({
     object: 'list',
     data: models,
@@ -112,264 +92,214 @@ app.get(['/v1/models', '/nvidia/v1/models', '/ehub/v1/models'], (req, res) => {
 });
 
 // =============================================================================
-// CHAT COMPLETIONS - NVIDIA NIM
+// NVIDIA NIM - CHAT COMPLETIONS
 // =============================================================================
-
 async function handleNvidiaCompletion(req, res) {
-  const { model, messages, temperature, max_tokens, stream } = req.body;
-  
-  // Smart model selection with fallback
+  const { model, messages, temperature, max_tokens, stream } = req.body || {};
+
+  // Smart model mapping / fallback selection
   let nimModel = NVIDIA_MODEL_MAPPING[model];
-  if (!nimModel) {
+  if (!nimModel && typeof model === 'string') {
+    // Try to probe the model on NIM - use a different variable name to avoid shadowing `res`
     try {
-      await axios.post(`${NIM_API_BASE}/chat/completions`, {
+      const probeResp = await axios.post(`${NIM_API_BASE}/chat/completions`, {
         model: model,
         messages: [{ role: 'user', content: 'test' }],
         max_tokens: 1
       }, {
         headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
-        validateStatus: (status) => status < 500
-      }).then(res => {
-        if (res.status >= 200 && res.status < 300) {
-          nimModel = model;
-        }
+        validateStatus: status => status < 500
       });
-    } catch (e) {}
-    
-    if (!nimModel) {
-      const modelLower = model.toLowerCase();
-      if (modelLower.includes('gpt-4') || modelLower.includes('claude-opus') || modelLower.includes('405b')) {
-        nimModel = 'meta/llama-3.1-405b-instruct';
-      } else if (modelLower.includes('claude') || modelLower.includes('gemini') || modelLower.includes('70b')) {
-        nimModel = 'meta/llama-3.1-70b-instruct';
-      } else {
-        nimModel = 'meta/llama-3.1-8b-instruct';
+
+      if (probeResp.status >= 200 && probeResp.status < 300) {
+        nimModel = model;
       }
+    } catch (err) {
+      // ignore probe error and fall back
     }
   }
-  
-  // Transform OpenAI request to NIM format
+
+  if (!nimModel) {
+    const modelLower = (model || '').toString().toLowerCase();
+    if (modelLower.includes('gpt-4') || modelLower.includes('claude-opus') || modelLower.includes('405b')) {
+      nimModel = 'meta/llama-3.1-405b-instruct';
+    } else if (modelLower.includes('claude') || modelLower.includes('gemini') || modelLower.includes('70b')) {
+      nimModel = 'meta/llama-3.1-70b-instruct';
+    } else {
+      nimModel = 'meta/llama-3.1-8b-instruct';
+    }
+  }
+
   const nimRequest = {
     model: nimModel,
-    messages: messages,
-    temperature: temperature || 0.6,
-    max_tokens: max_tokens || 9024,
-    extra_body: ENABLE_THINKING_MODE ? { chat_template_kwargs: { thinking: true } } : undefined,
-    stream: stream || false
+    messages: messages || [],
+    temperature: typeof temperature === 'number' ? temperature : 0.6,
+    max_tokens: typeof max_tokens === 'number' ? max_tokens : 1024,
+    // pass thinking parameter if enabled (wrapped)
+    ...(ENABLE_THINKING_MODE ? { chat_template_kwargs: { thinking: true } } : {}),
+    stream: !!stream
   };
-  
-  // Make request to NVIDIA NIM API
-  const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-    headers: {
-      'Authorization': `Bearer ${NIM_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    responseType: stream ? 'stream' : 'json'
-  });
-  
-  if (stream) {
-    // Handle streaming response with reasoning
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    
-    let buffer = '';
-    let reasoningStarted = false;
-    
-    response.data.on('data', (chunk) => {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      
-      lines.forEach(line => {
-        if (line.startsWith('data: ')) {
-          if (line.includes('[DONE]')) {
-            res.write(line + '\n');
-            return;
-          }
-          
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.choices?.[0]?.delta) {
-              const reasoning = data.choices[0].delta.reasoning_content;
-              const content = data.choices[0].delta.content;
-              
-              if (SHOW_REASONING) {
-                let combinedContent = '';
-                
-                if (reasoning && !reasoningStarted) {
-                  combinedContent = '<think>\n' + reasoning;
-                  reasoningStarted = true;
-                } else if (reasoning) {
-                  combinedContent = reasoning;
-                }
-                
-                if (content && reasoningStarted) {
-                  combinedContent += '</think>\n\n' + content;
-                  reasoningStarted = false;
-                } else if (content) {
-                  combinedContent += content;
-                }
-                
-                if (combinedContent) {
-                  data.choices[0].delta.content = combinedContent;
-                  delete data.choices[0].delta.reasoning_content;
-                }
-              } else {
-                if (content) {
-                  data.choices[0].delta.content = content;
-                } else {
-                  data.choices[0].delta.content = '';
-                }
-                delete data.choices[0].delta.reasoning_content;
-              }
+
+  try {
+    const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
+      headers: {
+        'Authorization': `Bearer ${NIM_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      responseType: stream ? 'stream' : 'json',
+      validateStatus: status => status < 500
+    });
+
+    if (stream) {
+      // STREAMING: NIM returns an event-stream-like stream. Forward to client as SSE.
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      // flush headers early if available
+      if (res.flushHeaders) res.flushHeaders();
+
+      const streamData = response.data;
+
+      let buffer = '';
+      let reasoningStarted = false;
+
+      streamData.on('data', (chunk) => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        lines.forEach(line => {
+          if (!line) return;
+          // If line begins with 'data: ' treat as SSE event
+          if (line.startsWith('data: ')) {
+            const payload = line.slice(6);
+            if (payload === '[DONE]') {
+              res.write(`data: [DONE]\n\n`);
+              return;
             }
-            res.write(`data: ${JSON.stringify(data)}\n\n`);
-          } catch (e) {
-            res.write(line + '\n');
+
+            try {
+              const parsed = JSON.parse(payload);
+
+              // transform reasoning in deltas if present
+              if (parsed.choices?.[0]?.delta) {
+                const delta = parsed.choices[0].delta;
+                const reasoning = delta.reasoning_content;
+                const content = delta.content;
+
+                if (SHOW_REASONING) {
+                  let combined = '';
+                  if (reasoning && !reasoningStarted) {
+                    combined = '<think>\n' + reasoning;
+                    reasoningStarted = true;
+                  } else if (reasoning) {
+                    combined = reasoning;
+                  }
+
+                  if (content && reasoningStarted) {
+                    combined += '\n</think>\n\n' + content;
+                    reasoningStarted = false;
+                  } else if (content) {
+                    combined += content;
+                  }
+
+                  if (combined) {
+                    parsed.choices[0].delta.content = combined;
+                    delete parsed.choices[0].delta.reasoning_content;
+                  }
+                } else {
+                  // remove reasoning field and keep content (or empty)
+                  parsed.choices[0].delta.content = content || '';
+                  delete parsed.choices[0].delta.reasoning_content;
+                }
+              }
+
+              res.write(`data: ${JSON.stringify(parsed)}\n\n`);
+            } catch (err) {
+              // if parsing fails, forward raw line
+              res.write(`data: ${line}\n\n`);
+            }
+          } else {
+            // not an SSE 'data: ' line — forward raw
+            res.write(`data: ${line}\n\n`);
           }
-        }
+        });
       });
-    });
-    
-    response.data.on('end', () => res.end());
-    response.data.on('error', (err) => {
-      console.error('Stream error:', err);
-      res.end();
-    });
-  } else {
-    // Transform NIM response to OpenAI format with reasoning
-    const openaiResponse = {
-      id: `chatcmpl-${Date.now()}`,
-      object: 'chat.completion',
-      created: Math.floor(Date.now() / 1000),
-      model: model,
-      choices: response.data.choices.map(choice => {
-        let fullContent = choice.message?.content || '';
-        
-        if (SHOW_REASONING && choice.message?.reasoning_content) {
-          fullContent = '<think>\n' + choice.message.reasoning_content + '\n</think>\n\n' + fullContent;
+
+      streamData.on('end', () => {
+        try { res.end(); } catch (e) {}
+      });
+      streamData.on('error', (err) => {
+        console.error('NIM stream error:', err);
+        try { res.end(); } catch (e) {}
+      });
+
+    } else {
+      // NON-STREAM: transform NIM response to OpenAI-compatible format
+      const nimData = response.data || {};
+      const choices = Array.isArray(nimData.choices) ? nimData.choices : [];
+
+      const openaiChoices = choices.map((choice) => {
+        const msg = choice.message || {};
+        let text = msg.content || '';
+
+        if (SHOW_REASONING && msg.reasoning_content) {
+          text = '<think>\n' + msg.reasoning_content + '\n</think>\n\n' + text;
         }
-        
+
         return {
-          index: choice.index,
+          index: choice.index ?? 0,
           message: {
-            role: choice.message.role,
-            content: fullContent
+            role: msg.role || 'assistant',
+            content: text
           },
-          finish_reason: choice.finish_reason
+          finish_reason: choice.finish_reason || null
         };
-      }),
-      usage: response.data.usage || {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0
+      });
+
+      const openaiResponse = {
+        id: `chatcmpl-${Date.now()}`,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: model || nimModel,
+        choices: openaiChoices,
+        usage: nimData.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      };
+
+      res.json(openaiResponse);
+    }
+
+  } catch (err) {
+    console.error('NIM request error:', err && err.message);
+    const status = err.response?.status || 500;
+    res.status(status).json({
+      error: {
+        message: err.response?.data?.error || err.message || 'NIM provider error',
+        type: 'provider_error',
+        code: status
       }
-    };
-    
-    res.json(openaiResponse);
+    });
   }
 }
 
 // =============================================================================
-// CHAT COMPLETIONS - ELECTRONHUB
+// ELECTRONHUB - CHAT COMPLETIONS
 // =============================================================================
-
 async function handleEhubCompletion(req, res) {
-  const { model, messages, temperature, max_tokens, stream } = req.body;
-  
-  // Get mapped model or use as-is
+  const { model, messages, temperature, max_tokens, stream } = req.body || {};
+
   const ehubModel = EHUB_MODEL_MAPPING[model] || model;
-  
-  // Transform request to ElectronHub format (OpenAI compatible)
+
   const ehubRequest = {
     model: ehubModel,
-    messages: messages,
-    temperature: temperature || 0.7,
-    max_tokens: max_tokens || 2048,
-    stream: stream || false
+    messages: messages || [],
+    temperature: typeof temperature === 'number' ? temperature : 0.7,
+    max_tokens: typeof max_tokens === 'number' ? max_tokens : 1024,
+    stream: !!stream
   };
-  
-  // Make request to ElectronHub API
-  const response = await axios.post(`${EHUB_API_BASE}/chat/completions`, ehubRequest, {
-    headers: {
-      'Authorization': `Bearer ${EHUB_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    responseType: stream ? 'stream' : 'json'
-  });
-  
-  if (stream) {
-    // Handle streaming response (ElectronHub uses OpenAI format)
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    
-    response.data.pipe(res);
-    
-    response.data.on('error', (err) => {
-      console.error('Stream error:', err);
-      res.end();
-    });
-  } else {
-    // ElectronHub returns OpenAI-compatible format, pass through
-    res.json(response.data);
-  }
-}
 
-// =============================================================================
-// UNIFIED CHAT COMPLETIONS ENDPOINT
-// =============================================================================
-
-app.post(['/v1/chat/completions', '/nvidia/v1/chat/completions', '/ehub/v1/chat/completions'], async (req, res) => {
   try {
-    const provider = detectProvider(req.path);
-    
-    if (provider === 'ehub') {
-      await handleEhubCompletion(req, res);
-    } else {
-      await handleNvidiaCompletion(req, res);
-    }
-    
-  } catch (error) {
-    console.error('Proxy error:', error.message);
-    
-    res.status(error.response?.status || 500).json({
-      error: {
-        message: error.message || 'Internal server error',
-        type: 'invalid_request_error',
-        code: error.response?.status || 500
-      }
-    });
-  }
-});
-
-// =============================================================================
-// CATCH-ALL
-// =============================================================================
-
-app.all('*', (req, res) => {
-  res.status(404).json({
-    error: {
-      message: `Endpoint ${req.path} not found`,
-      type: 'invalid_request_error',
-      code: 404
-    }
-  });
-});
-
-// =============================================================================
-// START SERVER
-// =============================================================================
-
-app.listen(PORT, () => {
-  console.log(`\n🚀 Multi-Provider API Proxy running on port ${PORT}`);
-  console.log(`\n📍 Endpoints:`);
-  console.log(`   Health check: http://localhost:${PORT}/health`);
-  console.log(`   NVIDIA NIM:   http://localhost:${PORT}/nvidia/v1/chat/completions`);
-  console.log(`   ElectronHub:  http://localhost:${PORT}/ehub/v1/chat/completions`);
-  console.log(`   Default:      http://localhost:${PORT}/v1/chat/completions (uses NVIDIA)`);
-  console.log(`\n⚙️  Settings:`);
-  console.log(`   Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`   Thinking mode: ${ENABLE_THINKING_MODE ? 'ENABLED' : 'DISABLED'}`);
-}
+    const response = await axios.post(`${EHUB_API_BASE}/chat/completions`, ehubRequest, {
+      headers: {
+        'Authorization': `Bearer ${EHUB_API_KEY}`,
+        'Conten
