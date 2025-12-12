@@ -302,4 +302,82 @@ async function handleEhubCompletion(req, res) {
     const response = await axios.post(`${EHUB_API_BASE}/chat/completions`, ehubRequest, {
       headers: {
         'Authorization': `Bearer ${EHUB_API_KEY}`,
-        'Conten
+        'Content-Type': 'application/json'
+      },
+      responseType: stream ? 'stream' : 'json',
+      validateStatus: status => status < 500
+    });
+
+    if (stream) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      if (res.flushHeaders) res.flushHeaders();
+
+      // response.data is a stream — pipe to client. Also listen for errors.
+      response.data.pipe(res);
+      response.data.on('error', (err) => {
+        console.error('ElectronHub stream error:', err);
+        try { res.end(); } catch (e) {}
+      });
+    } else {
+      res.json(response.data || {});
+    }
+  } catch (err) {
+    console.error('ElectronHub request error:', err && err.message);
+    const status = err.response?.status || 500;
+    res.status(status).json({
+      error: {
+        message: err.response?.data?.error || err.message || 'ElectronHub provider error',
+        type: 'provider_error',
+        code: status
+      }
+    });
+  }
+}
+
+// =============================================================================
+// UNIFIED CHAT COMPLETIONS ENDPOINT
+// =============================================================================
+app.post(['/v1/chat/completions', '/nvidia/v1/chat/completions', '/ehub/v1/chat/completions'], async (req, res) => {
+  try {
+    const provider = detectProvider(req.path);
+    if (provider === 'ehub') {
+      await handleEhubCompletion(req, res);
+    } else {
+      await handleNvidiaCompletion(req, res);
+    }
+  } catch (error) {
+    console.error('Proxy error:', error && error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({
+      error: {
+        message: error.message || 'Internal server error',
+        type: 'invalid_request_error',
+        code: status
+      }
+    });
+  }
+});
+
+// Catch-all
+app.all('*', (req, res) => {
+  res.status(404).json({
+    error: {
+      message: `Endpoint ${req.path} not found`,
+      type: 'invalid_request_error',
+      code: 404
+    }
+  });
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`\n🚀 Multi-Provider API Proxy running on port ${PORT}`);
+  console.log(`   Health:       http://localhost:${PORT}/health`);
+  console.log(`   NVIDIA NIM:   http://localhost:${PORT}/nvidia/v1/chat/completions`);
+  console.log(`   ElectronHub:  http://localhost:${PORT}/ehub/v1/chat/completions`);
+  console.log(`   Default:      http://localhost:${PORT}/v1/chat/completions (uses NVIDIA)`);
+  console.log(`   Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`   Thinking mode: ${ENABLE_THINKING_MODE ? 'ENABLED' : 'DISABLED'}`);
+});
