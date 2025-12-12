@@ -55,7 +55,7 @@ const EHUB_MODEL_MAPPING = {
   'deepseek-v3.2':'deepseek-v3.2:free',
   'deepseek-r1-0528':'deepseek-r1-0528:free',
   'gemini-2.5-flash':'gemini-2.5-flash:free',
-  'gemini-2.5-pro':'gemini-2.5-pro:free',,
+  'gemini-2.5-pro':'gemini-2.5-pro:free',
   'minimax-m2':'minimax-m2:free',
   'kimi-k2':'kimi-k2-instruct-0905:free',
   'kimi-k2-thinking':'kimi-k2-thinking:free'
