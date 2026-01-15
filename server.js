@@ -101,6 +101,7 @@ async function handleNvidiaCompletion(req, res) {
   // Smart model mapping / fallback selection
   let nimModel = NVIDIA_MODEL_MAPPING[model];
   if (!nimModel && typeof model === 'string') {
+    // Try to probe the model on NIM - use a different variable name to avoid shadowing `res`
     try {
       const probeResp = await axios.post(`${NIM_API_BASE}/chat/completions`, {
         model: model,
@@ -115,7 +116,7 @@ async function handleNvidiaCompletion(req, res) {
         nimModel = model;
       }
     } catch (err) {
-      // ignore probe error
+      // ignore probe error and fall back
     }
   }
 
@@ -130,17 +131,13 @@ async function handleNvidiaCompletion(req, res) {
     }
   }
 
-  // Determine if thinking mode should be enabled for this specific request
-  const isDeepseekV32 = model === 'deepseek-v3.2' || nimModel === 'deepseek-ai/deepseek-v3.2';
-  const shouldEnableThinking = ENABLE_THINKING_MODE || isDeepseekV32;
-
   const nimRequest = {
     model: nimModel,
     messages: messages || [],
     temperature: typeof temperature === 'number' ? temperature : 0.6,
     max_tokens: typeof max_tokens === 'number' ? max_tokens : 1024,
-    // Add thinking parameter if global toggle is on OR if it's the specific DeepSeek model
-    ...(shouldEnableThinking ? { chat_template_kwargs: { thinking: true } } : {}),
+    // pass thinking parameter if enabled (wrapped)
+    ...(ENABLE_THINKING_MODE ? { chat_template_kwargs: { thinking: true } } : {}),
     stream: !!stream
   };
 
@@ -154,14 +151,16 @@ async function handleNvidiaCompletion(req, res) {
       validateStatus: status => status < 500
     });
 
-    // ... (rest of the streaming and non-streaming logic remains the same)
     if (stream) {
+      // STREAMING: NIM returns an event-stream-like stream. Forward to client as SSE.
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
+      // flush headers early if available
       if (res.flushHeaders) res.flushHeaders();
 
       const streamData = response.data;
+
       let buffer = '';
       let reasoningStarted = false;
 
@@ -172,6 +171,7 @@ async function handleNvidiaCompletion(req, res) {
 
         lines.forEach(line => {
           if (!line) return;
+          // If line begins with 'data: ' treat as SSE event
           if (line.startsWith('data: ')) {
             const payload = line.slice(6);
             if (payload === '[DONE]') {
@@ -181,6 +181,8 @@ async function handleNvidiaCompletion(req, res) {
 
             try {
               const parsed = JSON.parse(payload);
+
+              // transform reasoning in deltas if present
               if (parsed.choices?.[0]?.delta) {
                 const delta = parsed.choices[0].delta;
                 const reasoning = delta.reasoning_content;
@@ -207,52 +209,76 @@ async function handleNvidiaCompletion(req, res) {
                     delete parsed.choices[0].delta.reasoning_content;
                   }
                 } else {
+                  // remove reasoning field and keep content (or empty)
                   parsed.choices[0].delta.content = content || '';
                   delete parsed.choices[0].delta.reasoning_content;
                 }
               }
+
               res.write(`data: ${JSON.stringify(parsed)}\n\n`);
             } catch (err) {
+              // if parsing fails, forward raw line
               res.write(`data: ${line}\n\n`);
             }
           } else {
+            // not an SSE 'data: ' line — forward raw
             res.write(`data: ${line}\n\n`);
           }
         });
       });
 
-      streamData.on('end', () => { try { res.end(); } catch (e) {} });
-      streamData.on('error', (err) => { try { res.end(); } catch (e) {} });
+      streamData.on('end', () => {
+        try { res.end(); } catch (e) {}
+      });
+      streamData.on('error', (err) => {
+        console.error('NIM stream error:', err);
+        try { res.end(); } catch (e) {}
+      });
 
     } else {
+      // NON-STREAM: transform NIM response to OpenAI-compatible format
       const nimData = response.data || {};
       const choices = Array.isArray(nimData.choices) ? nimData.choices : [];
+
       const openaiChoices = choices.map((choice) => {
         const msg = choice.message || {};
         let text = msg.content || '';
+
         if (SHOW_REASONING && msg.reasoning_content) {
           text = '<think>\n' + msg.reasoning_content + '\n</think>\n\n' + text;
         }
+
         return {
           index: choice.index ?? 0,
-          message: { role: msg.role || 'assistant', content: text },
+          message: {
+            role: msg.role || 'assistant',
+            content: text
+          },
           finish_reason: choice.finish_reason || null
         };
       });
 
-      res.json({
+      const openaiResponse = {
         id: `chatcmpl-${Date.now()}`,
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: model || nimModel,
         choices: openaiChoices,
         usage: nimData.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
-      });
+      };
+
+      res.json(openaiResponse);
     }
+
   } catch (err) {
+    console.error('NIM request error:', err && err.message);
     const status = err.response?.status || 500;
     res.status(status).json({
-      error: { message: err.response?.data?.error || err.message || 'NIM provider error', type: 'provider_error', code: status }
+      error: {
+        message: err.response?.data?.error || err.message || 'NIM provider error',
+        type: 'provider_error',
+        code: status
+      }
     });
   }
 }
