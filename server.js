@@ -23,7 +23,7 @@ const EHUB_API_KEY = process.env.EHUB_API_KEY || 'ek-uJfTKZb87hFO3fhUVm0UVw6ses4
 // FEATURE TOGGLES
 // =============================================================================
 const SHOW_REASONING = true;
-const ENABLE_THINKING_MODE = false; // Set to false so it's ONLY enabled via tag
+const ENABLE_THINKING_MODE = false;
 
 // =============================================================================
 // MODEL MAPPINGS
@@ -72,7 +72,7 @@ function processThinkingTag(messages) {
   const cleanedMessages = messages.map(msg => {
     if (msg.content && typeof msg.content === 'string' && msg.content.includes('<ENABLETHINKING>')) {
       shouldThink = true;
-      // Remove the tag so the model doesn't see it as part of the prompt
+      // Remove the tag from the content so the model doesn't see it
       return { ...msg, content: msg.content.replace(/<ENABLETHINKING>/g, '').trim() };
     }
     return msg;
@@ -82,14 +82,46 @@ function processThinkingTag(messages) {
 }
 
 // =============================================================================
+// ENDPOINTS
+// =============================================================================
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    service: 'Multi-Provider API Proxy', 
+    providers: ['nvidia', 'ehub'],
+    reasoning_display: SHOW_REASONING,
+    thinking_mode: ENABLE_THINKING_MODE
+  });
+});
+
+app.get(['/v1/models', '/nvidia/v1/models', '/ehub/v1/models'], (req, res) => {
+  const provider = detectProvider(req.path);
+  const modelMapping = provider === 'ehub' ? EHUB_MODEL_MAPPING : NVIDIA_MODEL_MAPPING;
+
+  const models = Object.keys(modelMapping).map(model => ({
+    id: model,
+    object: 'model',
+    created: Date.now(),
+    owned_by: `${provider}-proxy`
+  }));
+
+  res.json({
+    object: 'list',
+    data: models,
+    provider: provider
+  });
+});
+
+// =============================================================================
 // NVIDIA NIM - CHAT COMPLETIONS
 // =============================================================================
 async function handleNvidiaCompletion(req, res) {
   const { model, messages, temperature, max_tokens, stream } = req.body || {};
 
-  // 1. Check for the tag and clean it out
+  // Check for the <ENABLETHINKING> tag in messages
   const { shouldThink: tagDetected, cleanedMessages } = processThinkingTag(messages);
 
+  // Smart model mapping / fallback selection
   let nimModel = NVIDIA_MODEL_MAPPING[model];
   if (!nimModel && typeof model === 'string') {
     try {
@@ -101,18 +133,27 @@ async function handleNvidiaCompletion(req, res) {
         headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
         validateStatus: status => status < 500
       });
-      if (probeResp.status >= 200 && probeResp.status < 300) nimModel = model;
-    } catch (err) {}
+
+      if (probeResp.status >= 200 && probeResp.status < 300) {
+        nimModel = model;
+      }
+    } catch (err) {
+      // ignore probe error
+    }
   }
 
   if (!nimModel) {
     const modelLower = (model || '').toString().toLowerCase();
-    if (modelLower.includes('gpt-4') || modelLower.includes('405b')) nimModel = 'meta/llama-3.1-405b-instruct';
-    else if (modelLower.includes('70b')) nimModel = 'meta/llama-3.1-70b-instruct';
-    else nimModel = 'meta/llama-3.1-8b-instruct';
+    if (modelLower.includes('gpt-4') || modelLower.includes('claude-opus') || modelLower.includes('405b')) {
+      nimModel = 'meta/llama-3.1-405b-instruct';
+    } else if (modelLower.includes('claude') || modelLower.includes('gemini') || modelLower.includes('70b')) {
+      nimModel = 'meta/llama-3.1-70b-instruct';
+    } else {
+      nimModel = 'meta/llama-3.1-8b-instruct';
+    }
   }
 
-  // 2. Determine thinking mode strictly based on Tag or Global Toggle
+  // Determine if thinking mode should be enabled - ONLY via global toggle or tag
   const shouldEnableThinking = ENABLE_THINKING_MODE || tagDetected;
 
   const nimRequest = {
@@ -120,19 +161,27 @@ async function handleNvidiaCompletion(req, res) {
     messages: cleanedMessages || [],
     temperature: typeof temperature === 'number' ? temperature : 0.6,
     max_tokens: typeof max_tokens === 'number' ? max_tokens : 1024,
+    // Add thinking parameter if enabled via global toggle or tag detection
     ...(shouldEnableThinking ? { chat_template_kwargs: { thinking: true } } : {}),
     stream: !!stream
   };
 
   try {
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-      headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${NIM_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
       responseType: stream ? 'stream' : 'json',
       validateStatus: status => status < 500
     });
 
     if (stream) {
       res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      if (res.flushHeaders) res.flushHeaders();
+
       const streamData = response.data;
       let buffer = '';
       let reasoningStarted = false;
@@ -141,47 +190,91 @@ async function handleNvidiaCompletion(req, res) {
         buffer += chunk.toString();
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
-        lines.forEach(line => {
-          if (!line || !line.startsWith('data: ')) return;
-          const payload = line.slice(6);
-          if (payload === '[DONE]') { res.write(`data: [DONE]\n\n`); return; }
 
-          try {
-            const parsed = JSON.parse(payload);
-            const delta = parsed.choices?.[0]?.delta;
-            if (delta) {
-              const reasoning = delta.reasoning_content;
-              const content = delta.content;
-              if (SHOW_REASONING) {
-                let combined = '';
-                if (reasoning && !reasoningStarted) { combined = '<think>\n' + reasoning; reasoningStarted = true; }
-                else if (reasoning) { combined = reasoning; }
-                if (content && reasoningStarted) { combined += '\n</think>\n\n' + content; reasoningStarted = false; }
-                else if (content) { combined += content; }
-                if (combined) { parsed.choices[0].delta.content = combined; delete parsed.choices[0].delta.reasoning_content; }
-              } else {
-                delete parsed.choices[0].delta.reasoning_content;
-              }
+        lines.forEach(line => {
+          if (!line) return;
+          if (line.startsWith('data: ')) {
+            const payload = line.slice(6);
+            if (payload === '[DONE]') {
+              res.write(`data: [DONE]\n\n`);
+              return;
             }
-            res.write(`data: ${JSON.stringify(parsed)}\n\n`);
-          } catch (err) { res.write(`data: ${line}\n\n`); }
+
+            try {
+              const parsed = JSON.parse(payload);
+              if (parsed.choices?.[0]?.delta) {
+                const delta = parsed.choices[0].delta;
+                const reasoning = delta.reasoning_content;
+                const content = delta.content;
+
+                if (SHOW_REASONING) {
+                  let combined = '';
+                  if (reasoning && !reasoningStarted) {
+                    combined = '<think>\n' + reasoning;
+                    reasoningStarted = true;
+                  } else if (reasoning) {
+                    combined = reasoning;
+                  }
+
+                  if (content && reasoningStarted) {
+                    combined += '\n</think>\n\n' + content;
+                    reasoningStarted = false;
+                  } else if (content) {
+                    combined += content;
+                  }
+
+                  if (combined) {
+                    parsed.choices[0].delta.content = combined;
+                    delete parsed.choices[0].delta.reasoning_content;
+                  }
+                } else {
+                  parsed.choices[0].delta.content = content || '';
+                  delete parsed.choices[0].delta.reasoning_content;
+                }
+              }
+              res.write(`data: ${JSON.stringify(parsed)}\n\n`);
+            } catch (err) {
+              res.write(`data: ${line}\n\n`);
+            }
+          } else {
+            res.write(`data: ${line}\n\n`);
+          }
         });
       });
-      streamData.on('end', () => res.end());
+
+      streamData.on('end', () => { try { res.end(); } catch (e) {} });
+      streamData.on('error', (err) => { try { res.end(); } catch (e) {} });
+
     } else {
       const nimData = response.data || {};
-      const choices = (nimData.choices || []).map((choice) => {
+      const choices = Array.isArray(nimData.choices) ? nimData.choices : [];
+      const openaiChoices = choices.map((choice) => {
         const msg = choice.message || {};
         let text = msg.content || '';
         if (SHOW_REASONING && msg.reasoning_content) {
           text = '<think>\n' + msg.reasoning_content + '\n</think>\n\n' + text;
         }
-        return { index: choice.index, message: { role: msg.role, content: text }, finish_reason: choice.finish_reason };
+        return {
+          index: choice.index ?? 0,
+          message: { role: msg.role || 'assistant', content: text },
+          finish_reason: choice.finish_reason || null
+        };
       });
-      res.json({ ...nimData, choices });
+
+      res.json({
+        id: `chatcmpl-${Date.now()}`,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: model || nimModel,
+        choices: openaiChoices,
+        usage: nimData.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      });
     }
   } catch (err) {
-    res.status(err.response?.status || 500).json({ error: err.message });
+    const status = err.response?.status || 500;
+    res.status(status).json({
+      error: { message: err.response?.data?.error || err.message || 'NIM provider error', type: 'provider_error', code: status }
+    });
   }
 }
 
@@ -191,53 +284,98 @@ async function handleNvidiaCompletion(req, res) {
 async function handleEhubCompletion(req, res) {
   const { model, messages, temperature, max_tokens, stream } = req.body || {};
 
-  // 1. Check for the tag and clean it out
+  // Check for the <ENABLETHINKING> tag in messages
   const { shouldThink: tagDetected, cleanedMessages } = processThinkingTag(messages);
 
   const ehubModel = EHUB_MODEL_MAPPING[model] || model;
-  
-  // 2. Determine thinking mode strictly based on Tag or Global Toggle
-  const shouldEnableThinking = ENABLE_THINKING_MODE || tagDetected;
 
   const ehubRequest = {
     model: ehubModel,
     messages: cleanedMessages || [],
     temperature: typeof temperature === 'number' ? temperature : 0.7,
     max_tokens: typeof max_tokens === 'number' ? max_tokens : 1024,
-    // Apply thinking if tag is detected
-    ...(shouldEnableThinking ? { chat_template_kwargs: { thinking: true } } : {}),
+    // Enable thinking if tag is detected for Ehub models as well
+    ...(tagDetected ? { chat_template_kwargs: { thinking: true } } : {}),
     stream: !!stream
   };
 
   try {
     const response = await axios.post(`${EHUB_API_BASE}/chat/completions`, ehubRequest, {
-      headers: { 'Authorization': `Bearer ${EHUB_API_KEY}`, 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${EHUB_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
       responseType: stream ? 'stream' : 'json',
       validateStatus: status => status < 500
     });
 
     if (stream) {
       res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      if (res.flushHeaders) res.flushHeaders();
+
       response.data.pipe(res);
+      response.data.on('error', (err) => {
+        console.error('ElectronHub stream error:', err);
+        try { res.end(); } catch (e) {}
+      });
     } else {
       res.json(response.data || {});
     }
   } catch (err) {
-    res.status(err.response?.status || 500).json({ error: err.message });
+    console.error('ElectronHub request error:', err && err.message);
+    const status = err.response?.status || 500;
+    res.status(status).json({
+      error: {
+        message: err.response?.data?.error || err.message || 'ElectronHub provider error',
+        type: 'provider_error',
+        code: status
+      }
+    });
   }
 }
 
 // =============================================================================
-// UNIFIED CHAT COMPLETIONS ENDPOINT
+// UNIFIED ENDPOINT
 // =============================================================================
 app.post(['/v1/chat/completions', '/nvidia/v1/chat/completions', '/ehub/v1/chat/completions'], async (req, res) => {
-  const provider = detectProvider(req.path);
-  if (provider === 'ehub') await handleEhubCompletion(req, res);
-  else await handleNvidiaCompletion(req, res);
+  try {
+    const provider = detectProvider(req.path);
+    if (provider === 'ehub') {
+      await handleEhubCompletion(req, res);
+    } else {
+      await handleNvidiaCompletion(req, res);
+    }
+  } catch (error) {
+    console.error('Proxy error:', error && error.message);
+    const status = error.response?.status || 500;
+    res.status(status).json({
+      error: {
+        message: error.message || 'Internal server error',
+        type: 'invalid_request_error',
+        code: status
+      }
+    });
+  }
 });
 
-app.get('/health', (req, res) => res.json({ status: 'ok', thinking_via_tag_only: true }));
+app.all('*', (req, res) => {
+  res.status(404).json({
+    error: {
+      message: `Endpoint ${req.path} not found`,
+      type: 'invalid_request_error',
+      code: 404
+    }
+  });
+});
 
 app.listen(PORT, () => {
-  console.log(`🚀 Proxy running on port ${PORT}. Thinking mode now requires <ENABLETHINKING> tag.`);
+  console.log(`\n🚀 Multi-Provider API Proxy running on port ${PORT}`);
+  console.log(`   Health:       http://localhost:${PORT}/health`);
+  console.log(`   NVIDIA NIM:   http://localhost:${PORT}/nvidia/v1/chat/completions`);
+  console.log(`   ElectronHub:  http://localhost:${PORT}/ehub/v1/chat/completions`);
+  console.log(`   Default:      http://localhost:${PORT}/v1/chat/completions (uses NVIDIA)`);
+  console.log(`   Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`   Thinking mode: ${ENABLE_THINKING_MODE ? 'ENABLED' : 'DISABLED'}`);
 });
