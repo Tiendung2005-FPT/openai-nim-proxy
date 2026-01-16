@@ -62,16 +62,26 @@ function detectProvider(path) {
 }
 
 /**
- * Scans messages for <ENABLETHINKING> tag.
+ * Scans entire request body for <ENABLETHINKING> tag.
  * Returns { shouldThink: boolean, cleanedMessages: Array }
  */
-function processThinkingTag(messages) {
+function processThinkingTag(requestBody) {
   let shouldThink = false;
-  if (!messages || !Array.isArray(messages)) return { shouldThink, cleanedMessages: messages };
+  
+  // Check if the tag exists anywhere in the entire request body
+  const bodyString = JSON.stringify(requestBody);
+  if (bodyString.includes('<ENABLETHINKING>')) {
+    shouldThink = true;
+  }
+
+  // Clean the tag from messages if present
+  const messages = requestBody.messages;
+  if (!messages || !Array.isArray(messages)) {
+    return { shouldThink, cleanedMessages: messages };
+  }
 
   const cleanedMessages = messages.map(msg => {
     if (msg.content && typeof msg.content === 'string' && msg.content.includes('<ENABLETHINKING>')) {
-      shouldThink = true;
       // Remove the tag from the content so the model doesn't see it
       return { ...msg, content: msg.content.replace(/<ENABLETHINKING>/g, '').trim() };
     }
@@ -118,8 +128,8 @@ app.get(['/v1/models', '/nvidia/v1/models', '/ehub/v1/models'], (req, res) => {
 async function handleNvidiaCompletion(req, res) {
   const { model, messages, temperature, max_tokens, stream } = req.body || {};
 
-  // Check for the <ENABLETHINKING> tag in messages
-  const { shouldThink: tagDetected, cleanedMessages } = processThinkingTag(messages);
+  // Check for the <ENABLETHINKING> tag anywhere in the request body
+  const { shouldThink: tagDetected, cleanedMessages } = processThinkingTag(req.body);
 
   // Smart model mapping / fallback selection
   let nimModel = NVIDIA_MODEL_MAPPING[model];
@@ -153,16 +163,15 @@ async function handleNvidiaCompletion(req, res) {
     }
   }
 
-  // Determine if thinking mode should be enabled
-  const isDeepseekV32 = model === 'deepseek-v3.2' || nimModel === 'deepseek-ai/deepseek-v3.2';
-  const shouldEnableThinking = ENABLE_THINKING_MODE || isDeepseekV32 || tagDetected;
+  // Determine if thinking mode should be enabled - ONLY via global toggle or tag
+  const shouldEnableThinking = ENABLE_THINKING_MODE || tagDetected;
 
   const nimRequest = {
     model: nimModel,
     messages: cleanedMessages || [],
     temperature: typeof temperature === 'number' ? temperature : 0.6,
     max_tokens: typeof max_tokens === 'number' ? max_tokens : 1024,
-    // Add thinking parameter if enabled via global, model-specific, or tag-specific logic
+    // Add thinking parameter if enabled via global toggle or tag detection
     ...(shouldEnableThinking ? { chat_template_kwargs: { thinking: true } } : {}),
     stream: !!stream
   };
@@ -285,8 +294,8 @@ async function handleNvidiaCompletion(req, res) {
 async function handleEhubCompletion(req, res) {
   const { model, messages, temperature, max_tokens, stream } = req.body || {};
 
-  // Check for the <ENABLETHINKING> tag in messages
-  const { shouldThink: tagDetected, cleanedMessages } = processThinkingTag(messages);
+  // Check for the <ENABLETHINKING> tag anywhere in the request body
+  const { shouldThink: tagDetected, cleanedMessages } = processThinkingTag(req.body);
 
   const ehubModel = EHUB_MODEL_MAPPING[model] || model;
 
@@ -337,7 +346,9 @@ async function handleEhubCompletion(req, res) {
   }
 }
 
-// ... (Rest of the file remains the same: Unified endpoint, catch-all, and listen)
+// =============================================================================
+// UNIFIED ENDPOINT
+// =============================================================================
 app.post(['/v1/chat/completions', '/nvidia/v1/chat/completions', '/ehub/v1/chat/completions'], async (req, res) => {
   try {
     const provider = detectProvider(req.path);
