@@ -153,15 +153,16 @@ async function handleNvidiaCompletion(req, res) {
     }
   }
 
-  // Determine if thinking mode should be enabled - ONLY via global toggle or tag
-  const shouldEnableThinking = ENABLE_THINKING_MODE || tagDetected;
+  // Determine if thinking mode should be enabled
+  const isDeepseekV32 = model === 'deepseek-v3.2' || nimModel === 'deepseek-ai/deepseek-v3.2';
+  const shouldEnableThinking = ENABLE_THINKING_MODE || isDeepseekV32 || tagDetected;
 
   const nimRequest = {
     model: nimModel,
     messages: cleanedMessages || [],
     temperature: typeof temperature === 'number' ? temperature : 0.6,
     max_tokens: typeof max_tokens === 'number' ? max_tokens : 1024,
-    // Add thinking parameter if enabled via global toggle or tag detection
+    // Add thinking parameter if enabled via global, model-specific, or tag-specific logic
     ...(shouldEnableThinking ? { chat_template_kwargs: { thinking: true } } : {}),
     stream: !!stream
   };
@@ -336,9 +337,7 @@ async function handleEhubCompletion(req, res) {
   }
 }
 
-// =============================================================================
-// UNIFIED ENDPOINT
-// =============================================================================
+// ... (Rest of the file remains the same: Unified endpoint, catch-all, and listen)
 app.post(['/v1/chat/completions', '/nvidia/v1/chat/completions', '/ehub/v1/chat/completions'], async (req, res) => {
   try {
     const provider = detectProvider(req.path);
