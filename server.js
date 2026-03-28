@@ -1,5 +1,4 @@
-// server.js - Updated with GLM5-style thinking logic
-
+// server.js - Multi-Provider API Proxy (NVIDIA NIM + ElectronHub)
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -7,22 +6,27 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
 // =============================================================================
-// CONFIG & TOGGLES
+// PROVIDER CONFIGURATIONS
 // =============================================================================
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
-const EHUB_API_BASE = 'https://api.electronhub.ai/v1';
-const EHUB_API_KEY = process.env.EHUB_API_KEY || 'ek-uJfTKZb87hFO3fhUVm0UVw6ses446HozYvHlHtAJgfq4G6lmJo';
 
+const EHUB_API_BASE = 'https://api.electronhub.ai/v1';
+const EHUB_API_KEY = process.env.EHUB_API_KEY;
+
+// =============================================================================
+// FEATURE TOGGLES
+// =============================================================================
 const SHOW_REASONING = true;
 const ENABLE_THINKING_MODE = false;
 
 // =============================================================================
-// MODEL MAPPINGS (unchanged)
+// MODEL MAPPINGS
 // =============================================================================
 const NVIDIA_MODEL_MAPPING = {
   'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
@@ -59,17 +63,23 @@ function detectProvider(path) {
 
 function processThinkingTag(requestBody) {
   let shouldThink = false;
+
   const bodyString = JSON.stringify(requestBody);
   if (bodyString.includes('<ENABLETHINKING>')) {
     shouldThink = true;
   }
 
   const messages = requestBody.messages;
-  if (!messages || !Array.isArray(messages)) return { shouldThink, cleanedMessages: messages };
+  if (!messages || !Array.isArray(messages)) {
+    return { shouldThink, cleanedMessages: messages };
+  }
 
   const cleanedMessages = messages.map(msg => {
     if (msg.content && typeof msg.content === 'string' && msg.content.includes('<ENABLETHINKING>')) {
-      return { ...msg, content: msg.content.replace(/<ENABLETHINKING>/g, '').trim() };
+      return {
+        ...msg,
+        content: msg.content.replace(/<ENABLETHINKING>/g, '').trim()
+      };
     }
     return msg;
   });
@@ -77,54 +87,95 @@ function processThinkingTag(requestBody) {
   return { shouldThink, cleanedMessages };
 }
 
+// Merge thinking config (core logic)
+function buildThinkingConfig(req, shouldEnableThinking) {
+  const clientConfig = req.body.chat_template_kwargs || null;
+
+  if (!shouldEnableThinking && !clientConfig) return {};
+
+  return {
+    chat_template_kwargs: {
+      enable_thinking: true,
+      clear_thinking: false,
+      ...(clientConfig || {})
+    }
+  };
+}
+
 // =============================================================================
-// NVIDIA NIM HANDLER (Updated Logic)
+// HEALTH
+// =============================================================================
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    reasoning_display: SHOW_REASONING,
+    thinking_mode: ENABLE_THINKING_MODE
+  });
+});
+
+// =============================================================================
+// NVIDIA HANDLER
 // =============================================================================
 async function handleNvidiaCompletion(req, res) {
-  const { model, messages, temperature, max_tokens, stream } = req.body || {};
-  const { shouldThink: tagDetected, cleanedMessages } = processThinkingTag(req.body);
-  const shouldEnableThinking = ENABLE_THINKING_MODE || tagDetected;
+  const { model, temperature, max_tokens, stream } = req.body || {};
 
-  let nimModel = NVIDIA_MODEL_MAPPING[model] || model;
+  const { shouldThink: tagDetected, cleanedMessages } = processThinkingTag(req.body);
+
+  let nimModel = NVIDIA_MODEL_MAPPING[model] || 'meta/llama-3.1-8b-instruct';
+
+  const shouldEnableThinking = ENABLE_THINKING_MODE || tagDetected;
 
   const nimRequest = {
     model: nimModel,
     messages: cleanedMessages || [],
-    temperature: typeof temperature === 'number' ? temperature : 1, // Updated to match snippet
-    top_p: req.body.top_p || 1, // Added top_p from snippet
-    stream: !!stream,
-    // --- APPLIED THINKING LOGIC FROM SNIPPET ---
-    ...(shouldEnableThinking ? {
-      max_tokens: max_tokens || 16384, // Use higher tokens for thinking
-      chat_template_kwargs: {
-        "enable_thinking": true,
-        "clear_thinking": false
-      }
-    } : {
-      max_tokens: max_tokens || 1024
-    })
+    temperature: temperature ?? 0.6,
+    max_tokens: max_tokens ?? 1024,
+    ...buildThinkingConfig(req, shouldEnableThinking),
+    stream: !!stream
   };
 
   try {
-    const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-      headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
-      responseType: stream ? 'stream' : 'json'
-    });
+    const response = await axios.post(
+      `${NIM_API_BASE}/chat/completions`,
+      nimRequest,
+      {
+        headers: {
+          Authorization: `Bearer ${NIM_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        responseType: stream ? 'stream' : 'json'
+      }
+    );
 
     if (stream) {
       res.setHeader('Content-Type', 'text/event-stream');
-      const streamData = response.data;
-      let reasoningStarted = false;
-
-      streamData.on('data', (chunk) => {
-        // ... (Streaming logic preserved to handle reasoning_content to <think> tag conversion)
-        // Note: If the provider supports "clear_thinking: false", reasoning might 
-        // already be inside the content, but this logic ensures it works regardless of provider format.
-        res.write(chunk); 
-      });
-      streamData.on('end', () => res.end());
+      response.data.pipe(res);
     } else {
-      res.json(response.data);
+      const data = response.data;
+
+      const choices = data.choices.map(choice => {
+        let content = choice.message.content || '';
+
+        if (SHOW_REASONING && choice.message.reasoning_content) {
+          content =
+            `<think>\n${choice.message.reasoning_content}\n</think>\n\n` +
+            content;
+        }
+
+        return {
+          index: choice.index,
+          message: {
+            role: 'assistant',
+            content
+          }
+        };
+      });
+
+      res.json({
+        id: `chatcmpl-${Date.now()}`,
+        object: 'chat.completion',
+        choices
+      });
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -132,41 +183,38 @@ async function handleNvidiaCompletion(req, res) {
 }
 
 // =============================================================================
-// EHUB HANDLER (Updated Logic)
+// EHUB HANDLER
 // =============================================================================
 async function handleEhubCompletion(req, res) {
-  const { model, messages, temperature, max_tokens, stream } = req.body || {};
+  const { model, temperature, max_tokens, stream } = req.body || {};
+
   const { shouldThink: tagDetected, cleanedMessages } = processThinkingTag(req.body);
-  const shouldEnableThinking = tagDetected || (model && model.includes('thinking'));
 
   const ehubModel = EHUB_MODEL_MAPPING[model] || model;
 
   const ehubRequest = {
     model: ehubModel,
     messages: cleanedMessages || [],
-    temperature: typeof temperature === 'number' ? temperature : 1,
-    top_p: req.body.top_p || 1,
-    stream: !!stream,
-    // --- APPLIED THINKING LOGIC FROM SNIPPET ---
-    ...(shouldEnableThinking ? {
-      max_tokens: max_tokens || 16384,
-      chat_template_kwargs: {
-        "enable_thinking": true,
-        "clear_thinking": false
-      }
-    } : {
-      max_tokens: max_tokens || 1024
-    })
+    temperature: temperature ?? 0.7,
+    max_tokens: max_tokens ?? 1024,
+    ...buildThinkingConfig(req, tagDetected),
+    stream: !!stream
   };
 
   try {
-    const response = await axios.post(`${EHUB_API_BASE}/chat/completions`, ehubRequest, {
-      headers: { 'Authorization': `Bearer ${EHUB_API_KEY}`, 'Content-Type': 'application/json' },
-      responseType: stream ? 'stream' : 'json'
-    });
+    const response = await axios.post(
+      `${EHUB_API_BASE}/chat/completions`,
+      ehubRequest,
+      {
+        headers: {
+          Authorization: `Bearer ${EHUB_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        responseType: stream ? 'stream' : 'json'
+      }
+    );
 
     if (stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
       response.data.pipe(res);
     } else {
       res.json(response.data);
@@ -177,12 +225,20 @@ async function handleEhubCompletion(req, res) {
 }
 
 // =============================================================================
-// UNIFIED ENDPOINT & LISTEN
+// ROUTES
 // =============================================================================
-app.post(['/v1/chat/completions', '/nvidia/v1/chat/completions', '/ehub/v1/chat/completions'], async (req, res) => {
+app.post('/v1/chat/completions', async (req, res) => {
   const provider = detectProvider(req.path);
-  if (provider === 'ehub') return handleEhubCompletion(req, res);
-  return handleNvidiaCompletion(req, res);
+  if (provider === 'ehub') {
+    await handleEhubCompletion(req, res);
+  } else {
+    await handleNvidiaCompletion(req, res);
+  }
 });
 
-app.listen(PORT, () => console.log(`🚀 Proxy running on port ${PORT} with GLM5 thinking logic.`));
+// =============================================================================
+// START
+// =============================================================================
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
