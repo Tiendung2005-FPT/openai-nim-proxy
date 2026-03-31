@@ -179,7 +179,7 @@ async function handleNvidiaCompletion(req, res) {
     model: nimModel,
     messages: cleanedMessages || [],
     temperature: typeof temperature === 'number' ? temperature : 0.6,
-    max_tokens: typeof max_tokens === 'number' ? max_tokens : 1024,
+    max_tokens: typeof max_tokens === 'number' ? max_tokens : 9999,
     // Inject the unified thinking arguments if shouldThink is true
     ...(shouldThink ? { chat_template_kwargs: buildThinkingKwargs() } : {}),
     stream: !!stream
@@ -311,7 +311,7 @@ async function handleEhubCompletion(req, res) {
     model: ehubModel,
     messages: cleanedMessages || [],
     temperature: typeof temperature === 'number' ? temperature : 0.7,
-    max_tokens: typeof max_tokens === 'number' ? max_tokens : 1024,
+    max_tokens: typeof max_tokens === 'number' ? max_tokens : 9999,
     // Inject the unified thinking arguments if shouldThink is true
     ...(shouldThink ? { chat_template_kwargs: buildThinkingKwargs() } : {}),
     stream: !!stream
