@@ -143,6 +143,8 @@ async function handleNvidiaCompletion(req, res) {
 
   const { shouldThink, cleanedMessages } = processThinkingTag(req.body);
 
+  console.log(req.body)
+
   // Smart model mapping / fallback selection
   let nimModel = NVIDIA_MODEL_MAPPING[model];
   if (!nimModel && typeof model === 'string') {
