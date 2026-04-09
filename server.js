@@ -201,6 +201,7 @@ const chatEndpoints = [
 
 app.post(chatEndpoints, async (req, res) => {
   try {
+    console.log(req.body)
     const { presetName } = req.params;
     
     // If it's a preset endpoint, deconstruct the messages
