@@ -64,33 +64,42 @@ function deconstructPreset(messages) {
     const systemMsg = messages.find(m => m.role === 'system')?.content || '';
 
     // 1. Extract Dynamic CharName and CharPersona
-    const personaMatch = systemMsg.match(/<([^']+)'s Persona>(.*?)<\/\1's Persona>/s);
+    const personaRegex = /<([^']+)'s Persona>(.*?)<\/\1's Persona>/s;
+    const personaMatch = systemMsg.match(personaRegex);
     const CharName = personaMatch ? personaMatch[1].trim() : 'Character';
     const CharPersona = personaMatch ? personaMatch[2].trim() : '';
 
-    // 2. Extract standard tags
-    const extractTag = (tag) => {
+    // 2. Extract standard tags helper
+    const extractTag = (tag, text) => {
         const regex = new RegExp(`<${tag}>(.*?)</${tag}>`, 's');
-        const match = systemMsg.match(regex);
+        const match = text.match(regex);
         return match ? match[1].trim() : '';
     };
 
-    const Scenario = extractTag("Scenario");
-    const UserPersona = extractTag("UserPersona");
-    const ExampleDialogs = extractTag("example_dialogs");
+    const Scenario = extractTag("Scenario", systemMsg);
+    const UserPersona = extractTag("UserPersona", systemMsg);
+    const ExampleDialogs = extractTag("example_dialogs", systemMsg);
 
-    // 3. Extract User Name from the last message
+    // 3. Extract "Extra" (Everything else in systemMsg)
+    // We remove the specific tags we found to see what's left
+    let extraText = systemMsg;
+    extraText = extraText.replace(personaRegex, '');
+    extraText = extraText.replace(/<Scenario>.*?<\/Scenario>/gs, '');
+    extraText = extraText.replace(/<UserPersona>.*?<\/UserPersona>/gs, '');
+    extraText = extraText.replace(/<example_dialogs>.*?<\/example_dialogs>/gs, '');
+    
+    // Clean up whitespace and the word "test preset" if it's just a label
+    const Extra = extraText.trim();
+
+    // 4. Extract User Name from last message
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     const nameMatch = lastUserMsg.match(/^([^:]+):/);
     const UserName = nameMatch ? nameMatch[1].trim() : 'User';
 
-    // 4. Extract History and Split it
+    // 5. Extract and Split History
     const markerIndex = messages.findIndex(m => m.content === '.' && m.role === 'user');
     const History = markerIndex !== -1 ? messages.slice(markerIndex + 1) : [];
-
-    // HistoryBeforeLast: Everything except the very last message
     const HistoryBeforeLast = History.length > 1 ? History.slice(0, -1) : [];
-    // HistoryLast: Just the very last message (wrapped in an array for easy spreading)
     const HistoryLast = History.length > 0 ? History.slice(-1) : [];
 
     return { 
@@ -99,6 +108,7 @@ function deconstructPreset(messages) {
         Scenario, 
         UserPersona, 
         ExampleDialogs, 
+        Extra, // <--- New Variable
         History, 
         HistoryBeforeLast, 
         HistoryLast, 
@@ -151,6 +161,7 @@ const fillTemplate = (templateStr, extracted) => {
         .replace(/%SCENARIO%/g, safeStr(extracted.Scenario))
         .replace(/%USERPERSONA%/g, safeStr(extracted.UserPersona))
         .replace(/%EXAMPLEDIALOGS%/g, safeStr(extracted.ExampleDialogs))
+        .replace(/%EXTRA%/g, safeStr(extracted.Extra)) // <--- New Replacement
         .replace(/{{user}}/g, safeStr(extracted.UserName))
         .replace(/{{char}}/g, safeStr(extracted.CharName));
 
