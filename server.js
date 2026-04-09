@@ -168,7 +168,7 @@ const fillTemplate = (templateStr, extracted) => {
         console.error(`Character at position ${pos}: "${processedStr[pos]}" (Code: ${processedStr.charCodeAt(pos)})`);
     }
     return null;
-};
+}
 
 // =============================================================================
 // HANDLERS (NVIDIA & EHUB)
