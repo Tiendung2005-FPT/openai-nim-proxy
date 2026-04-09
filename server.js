@@ -128,19 +128,24 @@ const fillTemplate = (templateStr, extracted) => {
         .replace(/%USERPERSONA%/g, safeStr(extracted.UserPersona))
         .replace(/%EXAMPLEDIALOGS%/g, safeStr(extracted.ExampleDialogs));
 
+    processedStr = processedStr.replace(/(?<!")%HISTORY%(?!")/g, '"%HISTORY%"');
+    // === CRITICAL FIX END ===
+
     try {
-        // 3. Parse the template string into a real JavaScript Array
+        // 3. Now that %HISTORY% is safely inside quotes, JSON.parse will work
         const tempArray = JSON.parse(processedStr);
 
         // 4. Flatten the History into the array
         const finalMessages = [];
 
         tempArray.forEach(item => {
+            // Check if this item is our placeholder string
             if (item === "%HISTORY%") {
-                // Instead of adding the array, we add every MESSAGE inside the array (spread)
-                if (Array.isArray(extracted.History)) {
+                if (Array.isArray(extracted.History) && extracted.History.length > 0) {
+                    // Spread the history objects into the main array
                     finalMessages.push(...extracted.History);
                 }
+                // If history is empty, we just don't push anything (it removes the tag)
             } else {
                 finalMessages.push(item);
             }
