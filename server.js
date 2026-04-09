@@ -131,11 +131,11 @@ const fillTemplate = (templateStr, extracted) => {
     const safeStr = (str) => str ? JSON.stringify(str).slice(1, -1) : "";
 
     // 2. Replace simple text variables first
-    let processedStr = templateStr
+     let processedStr = templateStr
         .replace(/%CHARPERSONA%/g, safeStr(extracted.CharPersona))
         .replace(/%SCENARIO%/g, safeStr(extracted.Scenario))
         .replace(/%USERPERSONA%/g, safeStr(extracted.UserPersona))
-        .replace(/%EXAMPLEDIALOGS%/g, safeStr(extracted.ExampleDialogs));
+        .replace(/%EXAMPLEDIALOGS%/g, safeStr(extracted.ExampleDialogs))
         .replace(/{{user}}/g, safeStr(extracted.UserName));
 
     processedStr = processedStr.replace(/(?<!")%HISTORY%(?!")/g, '"%HISTORY%"');
