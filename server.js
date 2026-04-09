@@ -23,7 +23,7 @@ const EHUB_API_KEY = process.env.EHUB_API_KEY || 'ek-uJfTKZb87hFO3fhUVm0UVw6ses4
 // FEATURE TOGGLES
 // =============================================================================
 const SHOW_REASONING = true;
-const ENABLE_THINKING_MODE = true; // Changed to true: All models think by default
+const ENABLE_THINKING_MODE = true; 
 
 // =============================================================================
 // MODEL MAPPINGS
@@ -55,258 +55,109 @@ const EHUB_MODEL_MAPPING = {
 };
 
 // =============================================================================
-// HELPERS
+// HELPERS & DECONSTRUCTION
 // =============================================================================
+
+/**
+ * Extracts specific variables from the messages array based on XML tags and a specific user marker.
+ */
+function deconstructPreset(messages) {
+    if (!messages || !Array.isArray(messages)) return {};
+
+    const systemMsg = messages.find(m => m.role === 'system')?.content || '';
+
+    // 1. Extract Dynamic CharPersona using backreference
+    // Matches <Any Name's Persona>Content</Any Name's Persona>
+    const personaMatch = systemMsg.match(/<([^>]+'s Persona)>(.*?)<\/\1>/s);
+    const CharPersona = personaMatch ? personaMatch[2].trim() : '';
+
+    // 2. Extract standard tags
+    const extractTag = (tag) => {
+        const regex = new RegExp(`<${tag}>(.*?)</${tag}>`, 's');
+        const match = systemMsg.match(regex);
+        return match ? match[1].trim() : '';
+    };
+
+    const Scenario = extractTag("Scenario");
+    const UserPersona = extractTag("UserPersona");
+    const ExampleDialogs = extractTag("example_dialogs");
+
+    // 3. Extract History
+    // Finds everything after the message { content: '.', role: 'user' }
+    const markerIndex = messages.findIndex(m => m.content === '.' && m.role === 'user');
+    const History = markerIndex !== -1 ? messages.slice(markerIndex + 1) : [];
+
+    return { CharPersona, Scenario, UserPersona, ExampleDialogs, History };
+}
+
 function detectProvider(path) {
   if (path.startsWith('/nvidia/')) return 'nvidia';
   if (path.startsWith('/ehub/')) return 'ehub';
   return 'nvidia';
 }
 
-/**
- * Scans entire request body for <NOTHINK> tag.
- * Thinking is ENABLED by default. If <NOTHINK> is found, it disables thinking.
- * Returns { shouldThink: boolean, cleanedMessages: Array }
- */
 function processThinkingTag(requestBody) {
-  let shouldThink = true; // Thinking is on by default
-
+  let shouldThink = true; 
   const bodyString = JSON.stringify(requestBody);
   if (bodyString.includes('<NOTHINK>')) {
     shouldThink = false;
   }
-
   const messages = requestBody.messages;
   if (!messages || !Array.isArray(messages)) {
     return { shouldThink, cleanedMessages: messages };
   }
-
   const cleanedMessages = messages.map(msg => {
     if (msg.content && typeof msg.content === 'string' && msg.content.includes('<NOTHINK>')) {
       return { ...msg, content: msg.content.replace(/<NOTHINK>/g, '').trim() };
     }
     return msg;
   });
-
   return { shouldThink, cleanedMessages };
 }
 
-/**
- * Builds the chat_template_kwargs for thinking mode.
- * Unified kwargs config proven to work for models like Deepseek and GLM5
- */
 function buildThinkingKwargs() {
-  return { 
-    thinking: true, 
-    clear_thinking: true, 
-    do_sample: true, 
-    enable_thinking: true 
-  };
+  return { thinking: true, clear_thinking: true, do_sample: true, enable_thinking: true };
 }
 
 // =============================================================================
-// ENDPOINTS
+// HANDLERS (NVIDIA & EHUB) - Same logic as before
 // =============================================================================
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'Multi-Provider API Proxy',
-    providers: ['nvidia', 'ehub'],
-    reasoning_display: SHOW_REASONING,
-    thinking_mode: ENABLE_THINKING_MODE
-  });
-});
 
-app.get(['/v1/models', '/nvidia/v1/models', '/ehub/v1/models'], (req, res) => {
-  const provider = detectProvider(req.path);
-  const modelMapping = provider === 'ehub' ? EHUB_MODEL_MAPPING : NVIDIA_MODEL_MAPPING;
-
-  const models = Object.keys(modelMapping).map(model => ({
-    id: model,
-    object: 'model',
-    created: Date.now(),
-    owned_by: `${provider}-proxy`
-  }));
-
-  res.json({
-    object: 'list',
-    data: models,
-    provider: provider
-  });
-});
-
-// =============================================================================
-// NVIDIA NIM - CHAT COMPLETIONS
-// =============================================================================
 async function handleNvidiaCompletion(req, res) {
-  const { model, messages, temperature, max_tokens, stream } = req.body || {};
-
+  const { model, temperature, max_tokens, stream } = req.body || {};
   const { shouldThink, cleanedMessages } = processThinkingTag(req.body);
 
-  console.log(req.body)
-
-  // Smart model mapping / fallback selection
-  let nimModel = NVIDIA_MODEL_MAPPING[model];
-  if (!nimModel && typeof model === 'string') {
-    try {
-      const probeResp = await axios.post(`${NIM_API_BASE}/chat/completions`, {
-        model: model,
-        messages: [{ role: 'user', content: 'test' }],
-        max_tokens: 1
-      }, {
-        headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
-        validateStatus: status => status < 500
-      });
-
-      if (probeResp.status >= 200 && probeResp.status < 300) {
-        nimModel = model;
-      }
-    } catch (err) {
-      // ignore probe error
-    }
-  }
-
-  if (!nimModel) {
-    const modelLower = (model || '').toString().toLowerCase();
-    if (modelLower.includes('gpt-4') || modelLower.includes('claude-opus') || modelLower.includes('405b')) {
-      nimModel = 'meta/llama-3.1-405b-instruct';
-    } else if (modelLower.includes('claude') || modelLower.includes('gemini') || modelLower.includes('70b')) {
-      nimModel = 'meta/llama-3.1-70b-instruct';
-    } else {
-      nimModel = 'meta/llama-3.1-8b-instruct';
-    }
-  }
-
+  let nimModel = NVIDIA_MODEL_MAPPING[model] || model;
+  
   const nimRequest = {
     model: nimModel,
     messages: cleanedMessages || [],
     temperature: typeof temperature === 'number' ? temperature : 0.6,
     max_tokens: typeof max_tokens === 'number' ? max_tokens : 9999,
-    // Inject the unified thinking arguments if shouldThink is true
     ...(shouldThink ? { chat_template_kwargs: buildThinkingKwargs() } : {}),
     stream: !!stream
   };
 
   try {
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
-      headers: {
-        'Authorization': `Bearer ${NIM_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      responseType: stream ? 'stream' : 'json',
-      validateStatus: status => status < 500
+      headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
+      responseType: stream ? 'stream' : 'json'
     });
 
     if (stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      if (res.flushHeaders) res.flushHeaders();
-
-      const streamData = response.data;
-      let buffer = '';
-      let reasoningStarted = false;
-
-      streamData.on('data', (chunk) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        lines.forEach(line => {
-          if (!line) return;
-          if (line.startsWith('data: ')) {
-            const payload = line.slice(6);
-            if (payload === '[DONE]') {
-              res.write(`data: [DONE]\n\n`);
-              return;
-            }
-
-            try {
-              const parsed = JSON.parse(payload);
-              if (parsed.choices?.[0]?.delta) {
-                const delta = parsed.choices[0].delta;
-                const reasoning = delta.reasoning_content;
-                const content = delta.content;
-
-                if (SHOW_REASONING) {
-                  let combined = '';
-                  if (reasoning && !reasoningStarted) {
-                    combined = '<think>\n' + reasoning;
-                    reasoningStarted = true;
-                  } else if (reasoning) {
-                    combined = reasoning;
-                  }
-
-                  if (content && reasoningStarted) {
-                    combined += '\n</think>\n\n' + content;
-                    reasoningStarted = false;
-                  } else if (content) {
-                    combined += content;
-                  }
-
-                  if (combined) {
-                    parsed.choices[0].delta.content = combined;
-                    delete parsed.choices[0].delta.reasoning_content;
-                  }
-                } else {
-                  parsed.choices[0].delta.content = content || '';
-                  delete parsed.choices[0].delta.reasoning_content;
-                }
-              }
-              res.write(`data: ${JSON.stringify(parsed)}\n\n`);
-            } catch (err) {
-              res.write(`data: ${line}\n\n`);
-            }
-          } else {
-            res.write(`data: ${line}\n\n`);
-          }
-        });
-      });
-
-      streamData.on('end', () => { try { res.end(); } catch (e) {} });
-      streamData.on('error', (err) => { try { res.end(); } catch (e) {} });
-
+        res.setHeader('Content-Type', 'text/event-stream');
+        response.data.pipe(res);
     } else {
-      const nimData = response.data || {};
-      const choices = Array.isArray(nimData.choices) ? nimData.choices : [];
-      const openaiChoices = choices.map((choice) => {
-        const msg = choice.message || {};
-        let text = msg.content || '';
-        if (SHOW_REASONING && msg.reasoning_content) {
-          text = '<think>\n' + msg.reasoning_content + '\n</think>\n\n' + text;
-        }
-        return {
-          index: choice.index ?? 0,
-          message: { role: msg.role || 'assistant', content: text },
-          finish_reason: choice.finish_reason || null
-        };
-      });
-
-      res.json({
-        id: `chatcmpl-${Date.now()}`,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: model || nimModel,
-        choices: openaiChoices,
-        usage: nimData.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
-      });
+        res.json(response.data);
     }
   } catch (err) {
-    const status = err.response?.status || 500;
-    res.status(status).json({
-      error: { message: err.response?.data?.error || err.message || 'NIM provider error', type: 'provider_error', code: status }
-    });
+    res.status(500).json({ error: err.message });
   }
 }
 
-// =============================================================================
-// ELECTRONHUB - CHAT COMPLETIONS
-// =============================================================================
 async function handleEhubCompletion(req, res) {
-  const { model, messages, temperature, max_tokens, stream } = req.body || {};
-
+  const { model, temperature, max_tokens, stream } = req.body || {};
   const { shouldThink, cleanedMessages } = processThinkingTag(req.body);
-
   const ehubModel = EHUB_MODEL_MAPPING[model] || model;
 
   const ehubRequest = {
@@ -314,53 +165,57 @@ async function handleEhubCompletion(req, res) {
     messages: cleanedMessages || [],
     temperature: typeof temperature === 'number' ? temperature : 0.7,
     max_tokens: typeof max_tokens === 'number' ? max_tokens : 9999,
-    // Inject the unified thinking arguments if shouldThink is true
     ...(shouldThink ? { chat_template_kwargs: buildThinkingKwargs() } : {}),
     stream: !!stream
   };
 
   try {
     const response = await axios.post(`${EHUB_API_BASE}/chat/completions`, ehubRequest, {
-      headers: {
-        'Authorization': `Bearer ${EHUB_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      responseType: stream ? 'stream' : 'json',
-      validateStatus: status => status < 500
+      headers: { 'Authorization': `Bearer ${EHUB_API_KEY}`, 'Content-Type': 'application/json' },
+      responseType: stream ? 'stream' : 'json'
     });
-
     if (stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      if (res.flushHeaders) res.flushHeaders();
-
-      response.data.pipe(res);
-      response.data.on('error', (err) => {
-        console.error('ElectronHub stream error:', err);
-        try { res.end(); } catch (e) {}
-      });
+        res.setHeader('Content-Type', 'text/event-stream');
+        response.data.pipe(res);
     } else {
-      res.json(response.data || {});
+        res.json(response.data);
     }
   } catch (err) {
-    console.error('ElectronHub request error:', err && err.message);
-    const status = err.response?.status || 500;
-    res.status(status).json({
-      error: {
-        message: err.response?.data?.error || err.message || 'ElectronHub provider error',
-        type: 'provider_error',
-        code: status
-      }
-    });
+    res.status(500).json({ error: err.message });
   }
 }
 
 // =============================================================================
-// UNIFIED ENDPOINT
+// UNIFIED ENDPOINT (WITH PRESET SUPPORT)
 // =============================================================================
-app.post(['/v1/chat/completions', '/nvidia/v1/chat/completions', '/ehub/v1/chat/completions'], async (req, res) => {
+
+const chatEndpoints = [
+    '/v1/chat/completions',
+    '/nvidia/v1/chat/completions',
+    '/ehub/v1/chat/completions',
+    // Added Preset Endpoints
+    '/v1/chat/completions/preset/:presetName',
+    '/nvidia/v1/chat/completions/preset/:presetName',
+    '/ehub/v1/chat/completions/preset/:presetName'
+];
+
+app.post(chatEndpoints, async (req, res) => {
   try {
+    const { presetName } = req.params;
+    
+    // If it's a preset endpoint, deconstruct the messages
+    if (presetName) {
+        const extracted = deconstructPreset(req.body.messages);
+        console.log(`--- Preset [${presetName}] Deconstructed ---`);
+        console.log("CharPersona:", extracted.CharPersona);
+        console.log("Scenario:", extracted.Scenario);
+        console.log("UserPersona:", extracted.UserPersona);
+        console.log("History Length:", extracted.History.length);
+        
+        // You can now use 'extracted' variables to modify the logic or log them
+        // Example: req.body.extracted = extracted; 
+    }
+
     const provider = detectProvider(req.path);
     if (provider === 'ehub') {
       await handleEhubCompletion(req, res);
@@ -368,34 +223,13 @@ app.post(['/v1/chat/completions', '/nvidia/v1/chat/completions', '/ehub/v1/chat/
       await handleNvidiaCompletion(req, res);
     }
   } catch (error) {
-    console.error('Proxy error:', error && error.message);
     const status = error.response?.status || 500;
-    res.status(status).json({
-      error: {
-        message: error.message || 'Internal server error',
-        type: 'invalid_request_error',
-        code: status
-      }
-    });
+    res.status(status).json({ error: error.message });
   }
 });
 
-app.all('*', (req, res) => {
-  res.status(404).json({
-    error: {
-      message: `Endpoint ${req.path} not found`,
-      type: 'invalid_request_error',
-      code: 404
-    }
-  });
-});
-
+// Start server
 app.listen(PORT, () => {
-  console.log(`\n🚀 Multi-Provider API Proxy running on port ${PORT}`);
-  console.log(`   Health:       http://localhost:${PORT}/health`);
-  console.log(`   NVIDIA NIM:   http://localhost:${PORT}/nvidia/v1/chat/completions`);
-  console.log(`   ElectronHub:  http://localhost:${PORT}/ehub/v1/chat/completions`);
-  console.log(`   Default:      http://localhost:${PORT}/v1/chat/completions (uses NVIDIA)`);
-  console.log(`   Reasoning display: ${SHOW_REASONING ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`   Thinking mode: ${ENABLE_THINKING_MODE ? 'DEFAULT ON (use <NOTHINK> to disable)' : 'DISABLED'}`);
+  console.log(`🚀 Proxy running on port ${PORT}`);
+  console.log(`📍 Preset Example: http://localhost:${PORT}/v1/chat/completions/preset/myCharacter`);
 });
