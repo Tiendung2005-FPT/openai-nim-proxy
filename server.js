@@ -64,10 +64,7 @@ function deconstructPreset(messages) {
     const systemMsg = messages.find(m => m.role === 'system')?.content || '';
 
     // 1. Extract Dynamic CharName and CharPersona
-    // Captures group 1: the name before "'s Persona"
-    // Captures group 2: the actual persona content
     const personaMatch = systemMsg.match(/<([^']+)'s Persona>(.*?)<\/\1's Persona>/s);
-    
     const CharName = personaMatch ? personaMatch[1].trim() : 'Character';
     const CharPersona = personaMatch ? personaMatch[2].trim() : '';
 
@@ -87,11 +84,26 @@ function deconstructPreset(messages) {
     const nameMatch = lastUserMsg.match(/^([^:]+):/);
     const UserName = nameMatch ? nameMatch[1].trim() : 'User';
 
-    // 4. Extract History
+    // 4. Extract History and Split it
     const markerIndex = messages.findIndex(m => m.content === '.' && m.role === 'user');
     const History = markerIndex !== -1 ? messages.slice(markerIndex + 1) : [];
 
-    return { CharName, CharPersona, Scenario, UserPersona, ExampleDialogs, History, UserName };
+    // HistoryBeforeLast: Everything except the very last message
+    const HistoryBeforeLast = History.length > 1 ? History.slice(0, -1) : [];
+    // HistoryLast: Just the very last message (wrapped in an array for easy spreading)
+    const HistoryLast = History.length > 0 ? History.slice(-1) : [];
+
+    return { 
+        CharName, 
+        CharPersona, 
+        Scenario, 
+        UserPersona, 
+        ExampleDialogs, 
+        History, 
+        HistoryBeforeLast, 
+        HistoryLast, 
+        UserName 
+    };
 }
 
 function detectProvider(path) {
@@ -142,25 +154,26 @@ const fillTemplate = (templateStr, extracted) => {
         .replace(/{{user}}/g, safeStr(extracted.UserName))
         .replace(/{{char}}/g, safeStr(extracted.CharName));
 
-    processedStr = processedStr.replace(/(?<!")%HISTORY%(?!")/g, '"%HISTORY%"');
-    // === CRITICAL FIX END ===
+    // 2. Pre-parsing: Ensure all History tags are wrapped in quotes so JSON.parse doesn't crash
+    // This regex matches %HISTORY%, %HISTORY_BEFORE_LAST%, or %HISTORY_LAST%
+    processedStr = processedStr.replace(/(?<!")(%HISTORY%|%HISTORY_BEFORE_LAST%|%HISTORY_LAST%)(?!")/g, '"$1"');
 
     try {
-        // 3. Now that %HISTORY% is safely inside quotes, JSON.parse will work
         const tempArray = JSON.parse(processedStr);
-
-        // 4. Flatten the History into the array
         const finalMessages = [];
 
+        // 3. Post-parsing: Flatten the arrays back into the message list
         tempArray.forEach(item => {
-            // Check if this item is our placeholder string
             if (item === "%HISTORY%") {
-                if (Array.isArray(extracted.History) && extracted.History.length > 0) {
-                    // Spread the history objects into the main array
-                    finalMessages.push(...extracted.History);
-                }
-                // If history is empty, we just don't push anything (it removes the tag)
-            } else {
+                finalMessages.push(...extracted.History);
+            } 
+            else if (item === "%HISTORY_BEFORE_LAST%") {
+                finalMessages.push(...extracted.HistoryBeforeLast);
+            } 
+            else if (item === "%HISTORY_LAST%") {
+                finalMessages.push(...extracted.HistoryLast);
+            } 
+            else {
                 finalMessages.push(item);
             }
         });
