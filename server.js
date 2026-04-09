@@ -294,6 +294,7 @@ app.post(chatEndpoints, async (req, res) => {
         // Overwrite the incoming messages with the new template
         req.body.messages = parsedPresetMessages;
         console.log(`Successfully mapped variables to template.`);
+      console.log(req.body.messages)
     }
 
     const provider = detectProvider(req.path);
