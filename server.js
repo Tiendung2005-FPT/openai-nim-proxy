@@ -63,8 +63,12 @@ function deconstructPreset(messages) {
 
     const systemMsg = messages.find(m => m.role === 'system')?.content || '';
 
-    // 1. Extract Dynamic CharPersona
-    const personaMatch = systemMsg.match(/<([^>]+'s Persona)>(.*?)<\/\1>/s);
+    // 1. Extract Dynamic CharName and CharPersona
+    // Captures group 1: the name before "'s Persona"
+    // Captures group 2: the actual persona content
+    const personaMatch = systemMsg.match(/<([^']+)'s Persona>(.*?)<\/\1's Persona>/s);
+    
+    const CharName = personaMatch ? personaMatch[1].trim() : 'Character';
     const CharPersona = personaMatch ? personaMatch[2].trim() : '';
 
     // 2. Extract standard tags
@@ -79,16 +83,15 @@ function deconstructPreset(messages) {
     const ExampleDialogs = extractTag("example_dialogs");
 
     // 3. Extract User Name from the last message
-    // Looks for the last 'user' role message and matches everything before the first ":"
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     const nameMatch = lastUserMsg.match(/^([^:]+):/);
-    const UserName = nameMatch ? nameMatch[1].trim() : 'User'; // Fallback to 'User'
+    const UserName = nameMatch ? nameMatch[1].trim() : 'User';
 
     // 4. Extract History
     const markerIndex = messages.findIndex(m => m.content === '.' && m.role === 'user');
     const History = markerIndex !== -1 ? messages.slice(markerIndex + 1) : [];
 
-    return { CharPersona, Scenario, UserPersona, ExampleDialogs, History, UserName };
+    return { CharName, CharPersona, Scenario, UserPersona, ExampleDialogs, History, UserName };
 }
 
 function detectProvider(path) {
@@ -136,7 +139,8 @@ const fillTemplate = (templateStr, extracted) => {
         .replace(/%SCENARIO%/g, safeStr(extracted.Scenario))
         .replace(/%USERPERSONA%/g, safeStr(extracted.UserPersona))
         .replace(/%EXAMPLEDIALOGS%/g, safeStr(extracted.ExampleDialogs))
-        .replace(/{{user}}/g, safeStr(extracted.UserName));
+        .replace(/{{user}}/g, safeStr(extracted.UserName))
+        .replace(/{{char}}/g, safeStr(extracted.CharName));
 
     processedStr = processedStr.replace(/(?<!")%HISTORY%(?!")/g, '"%HISTORY%"');
     // === CRITICAL FIX END ===
