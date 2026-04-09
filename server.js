@@ -63,9 +63,11 @@ function deconstructPreset(messages) {
 
     const systemMsg = messages.find(m => m.role === 'system')?.content || '';
 
+    // 1. Extract Dynamic CharPersona
     const personaMatch = systemMsg.match(/<([^>]+'s Persona)>(.*?)<\/\1>/s);
     const CharPersona = personaMatch ? personaMatch[2].trim() : '';
 
+    // 2. Extract standard tags
     const extractTag = (tag) => {
         const regex = new RegExp(`<${tag}>(.*?)</${tag}>`, 's');
         const match = systemMsg.match(regex);
@@ -76,10 +78,17 @@ function deconstructPreset(messages) {
     const UserPersona = extractTag("UserPersona");
     const ExampleDialogs = extractTag("example_dialogs");
 
+    // 3. Extract User Name from the last message
+    // Looks for the last 'user' role message and matches everything before the first ":"
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+    const nameMatch = lastUserMsg.match(/^([^:]+):/);
+    const UserName = nameMatch ? nameMatch[1].trim() : 'User'; // Fallback to 'User'
+
+    // 4. Extract History
     const markerIndex = messages.findIndex(m => m.content === '.' && m.role === 'user');
     const History = markerIndex !== -1 ? messages.slice(markerIndex + 1) : [];
 
-    return { CharPersona, Scenario, UserPersona, ExampleDialogs, History };
+    return { CharPersona, Scenario, UserPersona, ExampleDialogs, History, UserName };
 }
 
 function detectProvider(path) {
@@ -127,6 +136,7 @@ const fillTemplate = (templateStr, extracted) => {
         .replace(/%SCENARIO%/g, safeStr(extracted.Scenario))
         .replace(/%USERPERSONA%/g, safeStr(extracted.UserPersona))
         .replace(/%EXAMPLEDIALOGS%/g, safeStr(extracted.ExampleDialogs));
+        .replace(/{{user}}/g, safeStr(extracted.UserName));
 
     processedStr = processedStr.replace(/(?<!")%HISTORY%(?!")/g, '"%HISTORY%"');
     // === CRITICAL FIX END ===
