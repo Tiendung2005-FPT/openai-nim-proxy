@@ -58,20 +58,14 @@ const EHUB_MODEL_MAPPING = {
 // HELPERS & DECONSTRUCTION
 // =============================================================================
 
-/**
- * Extracts specific variables from the messages array based on XML tags and a specific user marker.
- */
 function deconstructPreset(messages) {
     if (!messages || !Array.isArray(messages)) return {};
 
     const systemMsg = messages.find(m => m.role === 'system')?.content || '';
 
-    // 1. Extract Dynamic CharPersona using backreference
-    // Matches <Any Name's Persona>Content</Any Name's Persona>
     const personaMatch = systemMsg.match(/<([^>]+'s Persona)>(.*?)<\/\1>/s);
     const CharPersona = personaMatch ? personaMatch[2].trim() : '';
 
-    // 2. Extract standard tags
     const extractTag = (tag) => {
         const regex = new RegExp(`<${tag}>(.*?)</${tag}>`, 's');
         const match = systemMsg.match(regex);
@@ -82,8 +76,6 @@ function deconstructPreset(messages) {
     const UserPersona = extractTag("UserPersona");
     const ExampleDialogs = extractTag("example_dialogs");
 
-    // 3. Extract History
-    // Finds everything after the message { content: '.', role: 'user' }
     const markerIndex = messages.findIndex(m => m.content === '.' && m.role === 'user');
     const History = markerIndex !== -1 ? messages.slice(markerIndex + 1) : [];
 
@@ -120,7 +112,49 @@ function buildThinkingKwargs() {
 }
 
 // =============================================================================
-// HANDLERS (NVIDIA & EHUB) - Same logic as before
+// TEMPLATE PARSER
+// =============================================================================
+
+const fillTemplate = (templateStr, extracted) => {
+    if (!templateStr || typeof templateStr !== 'string') return null;
+
+    // 1. Helper for safe string escaping inside JSON
+    const safeStr = (str) => str ? JSON.stringify(str).slice(1, -1) : "";
+
+    // 2. Replace simple text variables first
+    let processedStr = templateStr
+        .replace(/%CHARPERSONA%/g, safeStr(extracted.CharPersona))
+        .replace(/%SCENARIO%/g, safeStr(extracted.Scenario))
+        .replace(/%USERPERSONA%/g, safeStr(extracted.UserPersona))
+        .replace(/%EXAMPLEDIALOGS%/g, safeStr(extracted.ExampleDialogs));
+
+    try {
+        // 3. Parse the template string into a real JavaScript Array
+        const tempArray = JSON.parse(processedStr);
+
+        // 4. Flatten the History into the array
+        const finalMessages = [];
+
+        tempArray.forEach(item => {
+            if (item === "%HISTORY%") {
+                // Instead of adding the array, we add every MESSAGE inside the array (spread)
+                if (Array.isArray(extracted.History)) {
+                    finalMessages.push(...extracted.History);
+                }
+            } else {
+                finalMessages.push(item);
+            }
+        });
+
+        return finalMessages;
+    } catch (error) {
+        console.error("JSON Parse Error in Template:", error.message);
+        return null;
+    }
+};
+
+// =============================================================================
+// HANDLERS (NVIDIA & EHUB)
 // =============================================================================
 
 async function handleNvidiaCompletion(req, res) {
@@ -193,7 +227,7 @@ const chatEndpoints = [
     '/v1/chat/completions',
     '/nvidia/v1/chat/completions',
     '/ehub/v1/chat/completions',
-    // Added Preset Endpoints
+    // Preset Endpoints
     '/v1/chat/completions/preset/:presetName',
     '/nvidia/v1/chat/completions/preset/:presetName',
     '/ehub/v1/chat/completions/preset/:presetName'
@@ -201,20 +235,32 @@ const chatEndpoints = [
 
 app.post(chatEndpoints, async (req, res) => {
   try {
-    console.log(req.body)
     const { presetName } = req.params;
     
-    // If it's a preset endpoint, deconstruct the messages
+    // If it's a preset endpoint, process the preset logic
     if (presetName) {
         const extracted = deconstructPreset(req.body.messages);
-        console.log(`--- Preset [${presetName}] Deconstructed ---`);
-        console.log("CharPersona:", extracted.CharPersona);
-        console.log("Scenario:", extracted.Scenario);
-        console.log("UserPersona:", extracted.UserPersona);
-        console.log("History Length:", extracted.History.length);
-        
-        // You can now use 'extracted' variables to modify the logic or log them
-        // Example: req.body.extracted = extracted; 
+        console.log(`--- Loading Preset: [${presetName}] ---`);
+
+        // Dynamically grab the template from ENV using the preset name
+        // Ex: presetName 'megumin' -> looks for process.env.MEGUMIN_PRESET
+        const envVarName = `${presetName.toUpperCase()}_PRESET`;
+        const template = process.env[envVarName];
+
+        if (!template) {
+            return res.status(404).json({ error: `Template for preset '${presetName}' not found in environment.` });
+        }
+
+        // Fill the template and parse it into an array
+        const parsedPresetMessages = fillTemplate(template, extracted);
+
+        if (!parsedPresetMessages) {
+            return res.status(500).json({ error: `Failed to parse filled template for '${presetName}'. Check server logs.` });
+        }
+
+        // Overwrite the incoming messages with the new template
+        req.body.messages = parsedPresetMessages;
+        console.log(`Successfully mapped variables to template.`);
     }
 
     const provider = detectProvider(req.path);
@@ -232,5 +278,6 @@ app.post(chatEndpoints, async (req, res) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Proxy running on port ${PORT}`);
-  console.log(`📍 Preset Example: http://localhost:${PORT}/v1/chat/completions/preset/myCharacter`);
+  console.log(`📍 Normal Example: http://localhost:${PORT}/v1/chat/completions`);
+  console.log(`📍 Preset Example: http://localhost:${PORT}/v1/chat/completions/preset/megumin`);
 });
