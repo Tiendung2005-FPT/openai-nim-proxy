@@ -148,9 +148,26 @@ const fillTemplate = (templateStr, extracted) => {
 
         return finalMessages;
     } catch (error) {
-        console.error("JSON Parse Error in Template:", error.message);
-        return null;
+    console.error("--- JSON PARSE ERROR ---");
+    console.error(error.message);
+
+    // Try to find the position from the error message
+    const posMatch = error.message.match(/at position (\d+)/);
+    if (posMatch) {
+        const pos = parseInt(posMatch[1]);
+        const start = Math.max(0, pos - 50);
+        const end = Math.min(processedStr.length, pos + 50);
+        
+        console.error("Context around error:");
+        console.error("...");
+        console.error(processedStr.substring(start, end));
+        console.error(" ".repeat(pos - start) + "^--- ERROR IS HERE");
+        console.error("...");
+        
+        // Log the exact character code
+        console.error(`Character at position ${pos}: "${processedStr[pos]}" (Code: ${processedStr.charCodeAt(pos)})`);
     }
+    return null;
 };
 
 // =============================================================================
