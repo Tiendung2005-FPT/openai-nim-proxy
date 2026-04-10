@@ -40,7 +40,8 @@ const NVIDIA_MODEL_MAPPING = {
   'deepseek-v3.1-terminus': 'deepseek-ai/deepseek-v3.1-terminus',
   'deepseek-v3.2': 'deepseek-ai/deepseek-v3.2',
   'glm-4.7': 'z-ai/glm4.7',
-  'glm-5': 'z-ai/glm5'
+  'glm-5': 'z-ai/glm5',
+  'kimi-k2.5': 'moonshotai/kimi-k2.5'
 };
 
 const EHUB_MODEL_MAPPING = {
