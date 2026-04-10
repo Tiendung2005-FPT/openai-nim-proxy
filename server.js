@@ -79,16 +79,16 @@ function deconstructPreset(messages) {
     const Scenario = extractTag("Scenario", systemMsg);
     const UserPersona = extractTag("UserPersona", systemMsg);
     const ExampleDialogs = extractTag("example_dialogs", systemMsg);
+    const Summary = extractTag("summary", systemMsg); // <--- New Extraction
 
     // 3. Extract "Extra" (Everything else in systemMsg)
-    // We remove the specific tags we found to see what's left
     let extraText = systemMsg;
     extraText = extraText.replace(personaRegex, '');
     extraText = extraText.replace(/<Scenario>.*?<\/Scenario>/gs, '');
     extraText = extraText.replace(/<UserPersona>.*?<\/UserPersona>/gs, '');
     extraText = extraText.replace(/<example_dialogs>.*?<\/example_dialogs>/gs, '');
+    extraText = extraText.replace(/<summary>.*?<\/summary>/gs, ''); // <--- Strip Summary from Extra
     
-    // Clean up whitespace and the word "test preset" if it's just a label
     const Extra = extraText.trim();
 
     // 4. Extract User Name from last message
@@ -108,7 +108,8 @@ function deconstructPreset(messages) {
         Scenario, 
         UserPersona, 
         ExampleDialogs, 
-        Extra, // <--- New Variable
+        Summary, // <--- Added to return object
+        Extra, 
         History, 
         HistoryBeforeLast, 
         HistoryLast, 
@@ -161,7 +162,8 @@ const fillTemplate = (templateStr, extracted) => {
         .replace(/%SCENARIO%/g, safeStr(extracted.Scenario))
         .replace(/%USERPERSONA%/g, safeStr(extracted.UserPersona))
         .replace(/%EXAMPLEDIALOGS%/g, safeStr(extracted.ExampleDialogs))
-        .replace(/%EXTRA%/g, safeStr(extracted.Extra)) // <--- New Replacement
+        .replace(/%SUMMARY%/g, safeStr(extracted.Summary)) // <--- New Replacement
+        .replace(/%EXTRA%/g, safeStr(extracted.Extra))
         .replace(/{{user}}/g, safeStr(extracted.UserName))
         .replace(/{{char}}/g, safeStr(extracted.CharName));
 
@@ -296,8 +298,6 @@ const chatEndpoints = [
 
 app.post(chatEndpoints, async (req, res) => {
   try {
-    console.log(req.body.messages)
-    
     const { presetName } = req.params;
     
     // If it's a preset endpoint, process the preset logic
@@ -324,7 +324,6 @@ app.post(chatEndpoints, async (req, res) => {
         // Overwrite the incoming messages with the new template
         req.body.messages = parsedPresetMessages;
         console.log(`Successfully mapped variables to template.`);
-      
     }
 
 
