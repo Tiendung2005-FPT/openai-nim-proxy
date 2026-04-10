@@ -296,6 +296,8 @@ const chatEndpoints = [
 
 app.post(chatEndpoints, async (req, res) => {
   try {
+    console.log(req.body.messages)
+    
     const { presetName } = req.params;
     
     // If it's a preset endpoint, process the preset logic
@@ -325,7 +327,6 @@ app.post(chatEndpoints, async (req, res) => {
       
     }
 
-    console.log(req.body.messages)
 
     const provider = detectProvider(req.path);
     if (provider === 'ehub') {
