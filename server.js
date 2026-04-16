@@ -6,9 +6,11 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+const BODY_LIMIT = process.env.BODY_LIMIT || '50mb';   // ← Changeable via Render env var
+
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: BODY_LIMIT }));           // ← FIXED
+app.use(express.urlencoded({ limit: BODY_LIMIT, extended: true }));
 
 // =============================================================================
 // PROVIDER CONFIGURATIONS
