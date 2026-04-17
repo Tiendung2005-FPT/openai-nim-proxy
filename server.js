@@ -304,7 +304,7 @@ async function handleEhubCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-     console.error("=== PROVIDER ERROR ===");
+     console.error(err);
 
   if (err.response) {
     console.error("Status:", err.response.status);
@@ -383,7 +383,7 @@ app.post(chatEndpoints, async (req, res) => {
       await handleNvidiaCompletion(req, res);
     }
   } catch (err) {
-     console.error("=== PROVIDER ERROR ===");
+     console.error(err);
 
   if (err.response) {
     console.error("Status:", err.response.status);
