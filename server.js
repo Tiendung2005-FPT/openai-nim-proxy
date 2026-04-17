@@ -362,7 +362,7 @@ app.post(chatEndpoints, async (req, res) => {
     } else {
       await handleNvidiaCompletion(req, res);
     }
-  } catch (error) {
+  } catch (err) {
      console.error("=== PROVIDER ERROR ===");
 
   if (err.response) {
