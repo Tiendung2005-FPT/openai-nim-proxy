@@ -256,7 +256,17 @@ async function handleNvidiaCompletion(req, res) {
   if (err.response) {
     console.error("Status:", err.response.status);
     console.error("Headers:", err.response.headers);
-    console.error("Data:", JSON.stringify(err.response.data, null, 2));
+
+    // ✅ SAFE logging
+    try {
+      if (typeof err.response.data === "string") {
+        console.error("Data:", err.response.data);
+      } else {
+        console.error("Data:", err.response.data);
+      }
+    } catch (e) {
+      console.error("Could not stringify response data");
+    }
 
     return res.status(err.response.status).json({
       error: err.response.data || err.message
@@ -299,7 +309,17 @@ async function handleEhubCompletion(req, res) {
   if (err.response) {
     console.error("Status:", err.response.status);
     console.error("Headers:", err.response.headers);
-    console.error("Data:", JSON.stringify(err.response.data, null, 2));
+
+    // ✅ SAFE logging
+    try {
+      if (typeof err.response.data === "string") {
+        console.error("Data:", err.response.data);
+      } else {
+        console.error("Data:", err.response.data);
+      }
+    } catch (e) {
+      console.error("Could not stringify response data");
+    }
 
     return res.status(err.response.status).json({
       error: err.response.data || err.message
@@ -368,7 +388,17 @@ app.post(chatEndpoints, async (req, res) => {
   if (err.response) {
     console.error("Status:", err.response.status);
     console.error("Headers:", err.response.headers);
-    console.error("Data:", JSON.stringify(err.response.data, null, 2));
+
+    // ✅ SAFE logging
+    try {
+      if (typeof err.response.data === "string") {
+        console.error("Data:", err.response.data);
+      } else {
+        console.error("Data:", err.response.data);
+      }
+    } catch (e) {
+      console.error("Could not stringify response data");
+    }
 
     return res.status(err.response.status).json({
       error: err.response.data || err.message
