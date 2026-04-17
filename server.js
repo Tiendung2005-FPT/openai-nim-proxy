@@ -251,30 +251,16 @@ async function handleNvidiaCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-     console.error(err);
-
-  if (err.response) {
-    console.error("Status:", err.response.status);
-    console.error("Headers:", err.response.headers);
-
-    // ✅ SAFE logging
-    try {
-      if (typeof err.response.data === "string") {
-        console.error("Data:", err.response.data);
-      } else {
-        console.error("Data:", err.response.data);
-      }
-    } catch (e) {
-      console.error("Could not stringify response data");
-    }
-
-    return res.status(err.response.status).json({
-      error: err.response.data || err.message
-    });
-  } else {
-    console.error("No response:", err.message);
-    return res.status(500).json({ error: err.message });
-  }
+    console.error('Backend error details:', {
+    status: err.response?.status,
+    data: err.response?.data,
+    message: err.message
+  });
+  const status = err.response?.status || 500;
+  res.status(status).json({ 
+    error: err.message,
+    details: err.response?.data || null 
+  });
   }
 }
 
@@ -304,30 +290,16 @@ async function handleEhubCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-     console.error(err);
-
-  if (err.response) {
-    console.error("Status:", err.response.status);
-    console.error("Headers:", err.response.headers);
-
-    // ✅ SAFE logging
-    try {
-      if (typeof err.response.data === "string") {
-        console.error("Data:", err.response.data);
-      } else {
-        console.error("Data:", err.response.data);
-      }
-    } catch (e) {
-      console.error("Could not stringify response data");
-    }
-
-    return res.status(err.response.status).json({
-      error: err.response.data || err.message
-    });
-  } else {
-    console.error("No response:", err.message);
-    return res.status(500).json({ error: err.message });
-  }
+    console.error('Backend error details:', {
+    status: err.response?.status,
+    data: err.response?.data,
+    message: err.message
+  });
+  const status = err.response?.status || 500;
+  res.status(status).json({ 
+    error: err.message,
+    details: err.response?.data || null 
+  });
   }
 }
 
@@ -383,30 +355,16 @@ app.post(chatEndpoints, async (req, res) => {
       await handleNvidiaCompletion(req, res);
     }
   } catch (err) {
-     console.error(err);
-
-  if (err.response) {
-    console.error("Status:", err.response.status);
-    console.error("Headers:", err.response.headers);
-
-    // ✅ SAFE logging
-    try {
-      if (typeof err.response.data === "string") {
-        console.error("Data:", err.response.data);
-      } else {
-        console.error("Data:", err.response.data);
-      }
-    } catch (e) {
-      console.error("Could not stringify response data");
-    }
-
-    return res.status(err.response.status).json({
-      error: err.response.data || err.message
-    });
-  } else {
-    console.error("No response:", err.message);
-    return res.status(500).json({ error: err.message });
-  }
+    console.error('Backend error details:', {
+    status: err.response?.status,
+    data: err.response?.data,
+    message: err.message
+  });
+  const status = err.response?.status || 500;
+  res.status(status).json({ 
+    error: err.message,
+    details: err.response?.data || null 
+  });
   }
 });
 
