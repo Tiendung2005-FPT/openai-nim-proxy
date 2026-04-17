@@ -146,7 +146,7 @@ function processThinkingTag(requestBody) {
 }
 
 function buildThinkingKwargs() {
-  return { clear_thinking: true, enable_thinking: true };
+  return { thinking: true, clear_thinking: true, do_sample: true, enable_thinking: true };
 }
 
 // =============================================================================
@@ -251,16 +251,7 @@ async function handleNvidiaCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-    console.error('Backend error details:', {
-    status: err.response?.status,
-    data: err.response?.data,
-    message: err.message
-  });
-  const status = err.response?.status || 500;
-  res.status(status).json({ 
-    error: err.message,
-    details: err.response?.data || null 
-  });
+    res.status(500).json({ error: err.message });
   }
 }
 
@@ -290,16 +281,7 @@ async function handleEhubCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-    console.error('Backend error details:', {
-    status: err.response?.status,
-    data: err.response?.data,
-    message: err.message
-  });
-  const status = err.response?.status || 500;
-  res.status(status).json({ 
-    error: err.message,
-    details: err.response?.data || null 
-  });
+    res.status(500).json({ error: err.message });
   }
 }
 
@@ -354,17 +336,9 @@ app.post(chatEndpoints, async (req, res) => {
     } else {
       await handleNvidiaCompletion(req, res);
     }
-  } catch (err) {
-    console.error('Backend error details:', {
-    status: err.response?.status,
-    data: err.response?.data,
-    message: err.message
-  });
-  const status = err.response?.status || 500;
-  res.status(status).json({ 
-    error: err.message,
-    details: err.response?.data || null 
-  });
+  } catch (error) {
+    const status = error.response?.status || 500;
+    res.status(status).json({ error: error.message });
   }
 });
 
