@@ -251,7 +251,7 @@ async function handleNvidiaCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-  console.error("=== PROVIDER ERROR ===");
+     console.error("=== PROVIDER ERROR ===");
 
   if (err.response) {
     console.error("Status:", err.response.status);
@@ -265,7 +265,7 @@ async function handleNvidiaCompletion(req, res) {
     console.error("No response:", err.message);
     return res.status(500).json({ error: err.message });
   }
-}
+  }
 }
 
 async function handleEhubCompletion(req, res) {
@@ -294,7 +294,7 @@ async function handleEhubCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-  console.error("=== PROVIDER ERROR ===");
+     console.error("=== PROVIDER ERROR ===");
 
   if (err.response) {
     console.error("Status:", err.response.status);
@@ -308,7 +308,6 @@ async function handleEhubCompletion(req, res) {
     console.error("No response:", err.message);
     return res.status(500).json({ error: err.message });
   }
-}
   }
 }
 
@@ -363,8 +362,8 @@ app.post(chatEndpoints, async (req, res) => {
     } else {
       await handleNvidiaCompletion(req, res);
     }
-  } catch (err) {
-  console.error("=== PROVIDER ERROR ===");
+  } catch (error) {
+     console.error("=== PROVIDER ERROR ===");
 
   if (err.response) {
     console.error("Status:", err.response.status);
@@ -378,7 +377,7 @@ app.post(chatEndpoints, async (req, res) => {
     console.error("No response:", err.message);
     return res.status(500).json({ error: err.message });
   }
-}
+  }
 });
 
 // Start server
