@@ -251,7 +251,7 @@ async function handleNvidiaCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-     console.error("=== PROVIDER ERROR ===");
+     console.error(err);
 
   if (err.response) {
     console.error("Status:", err.response.status);
