@@ -251,8 +251,21 @@ async function handleNvidiaCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-    res.status(500).json({ error: err.message });
+  console.error("=== PROVIDER ERROR ===");
+
+  if (err.response) {
+    console.error("Status:", err.response.status);
+    console.error("Headers:", err.response.headers);
+    console.error("Data:", JSON.stringify(err.response.data, null, 2));
+
+    return res.status(err.response.status).json({
+      error: err.response.data || err.message
+    });
+  } else {
+    console.error("No response:", err.message);
+    return res.status(500).json({ error: err.message });
   }
+}
 }
 
 async function handleEhubCompletion(req, res) {
@@ -281,7 +294,21 @@ async function handleEhubCompletion(req, res) {
         res.json(response.data);
     }
   } catch (err) {
-    res.status(500).json({ error: err.message });
+  console.error("=== PROVIDER ERROR ===");
+
+  if (err.response) {
+    console.error("Status:", err.response.status);
+    console.error("Headers:", err.response.headers);
+    console.error("Data:", JSON.stringify(err.response.data, null, 2));
+
+    return res.status(err.response.status).json({
+      error: err.response.data || err.message
+    });
+  } else {
+    console.error("No response:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+}
   }
 }
 
@@ -336,10 +363,22 @@ app.post(chatEndpoints, async (req, res) => {
     } else {
       await handleNvidiaCompletion(req, res);
     }
-  } catch (error) {
-    const status = error.response?.status || 500;
-    res.status(status).json({ error: error.message });
+  } catch (err) {
+  console.error("=== PROVIDER ERROR ===");
+
+  if (err.response) {
+    console.error("Status:", err.response.status);
+    console.error("Headers:", err.response.headers);
+    console.error("Data:", JSON.stringify(err.response.data, null, 2));
+
+    return res.status(err.response.status).json({
+      error: err.response.data || err.message
+    });
+  } else {
+    console.error("No response:", err.message);
+    return res.status(500).json({ error: err.message });
   }
+}
 });
 
 // Start server
