@@ -146,7 +146,7 @@ function processThinkingTag(requestBody) {
 }
 
 function buildThinkingKwargs() {
-  return { thinking: true, clear_thinking: true, do_sample: true, enable_thinking: true };
+  return { clear_thinking: true, enable_thinking: true };
 }
 
 // =============================================================================
