@@ -43,6 +43,7 @@ const NVIDIA_MODEL_MAPPING = {
   'deepseek-v3.2': 'deepseek-ai/deepseek-v3.2',
   'glm-4.7': 'z-ai/glm4.7',
   'glm-5': 'z-ai/glm5',
+  'glm-5.1': 'z-ai/glm-5.1',
   'kimi-k2.5': 'moonshotai/kimi-k2.5'
 };
 
@@ -288,6 +289,63 @@ async function handleEhubCompletion(req, res) {
 // =============================================================================
 // UNIFIED ENDPOINT (WITH PRESET SUPPORT)
 // =============================================================================
+
+app.get('/', (req, res) => {
+  res.send(`
+    <html>
+      <body style="font-family: sans-serif; padding: 2rem;">
+        <h2>🚀 Multi-Provider API Proxy is Running!</h2>
+        <p>Send <b>POST</b> requests to:</p>
+        <ul>
+          <li><code>/v1/chat/completions</code></li>
+          <li><code>/nvidia/v1/chat/completions</code></li>
+          <li><code>/ehub/v1/chat/completions</code></li>
+        </ul>
+      </body>
+    </html>
+  `);
+});
+
+const modelsEndpoints = [
+    '/v1/models',
+    '/nvidia/v1/models',
+    '/ehub/v1/models'
+];
+
+app.get(modelsEndpoints, (req, res) => {
+    let availableModels = [];
+
+    // If hitting the base /v1/models, show ALL models from both providers
+    if (req.path === '/v1/models') {
+        const allKeys = [
+            ...Object.keys(NVIDIA_MODEL_MAPPING), 
+            ...Object.keys(EHUB_MODEL_MAPPING)
+        ];
+        // Remove duplicates just in case both mappings share a key
+        availableModels = [...new Set(allKeys)]; 
+    } 
+    // If hitting /ehub/v1/models, only show EHUB models
+    else if (req.path.startsWith('/ehub/')) {
+        availableModels = Object.keys(EHUB_MODEL_MAPPING);
+    } 
+    // If hitting /nvidia/v1/models, only show NVIDIA models
+    else {
+        availableModels = Object.keys(NVIDIA_MODEL_MAPPING);
+    }
+
+    // Format into standard OpenAI models response
+    const formattedModels = availableModels.map(modelId => ({
+        id: modelId,
+        object: "model",
+        created: Math.floor(Date.now() / 1000), // Current UNIX timestamp
+        owned_by: "proxy"
+    }));
+
+    res.json({
+        object: "list",
+        data: formattedModels
+    });
+});
 
 const chatEndpoints = [
     '/v1/chat/completions',
